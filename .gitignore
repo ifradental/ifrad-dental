@@ -1,0 +1,41 @@
+# dependencies
+node_modules/
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# testing
+/coverage
+
+# next.js
+.next/
+/.next/
+out/
+/out/
+
+# production / electron
+build/
+/build
+dist/
+/dist
+release/
+/release
+
+# misc
+.DS_Store
+*.pem
+.gemini/
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+.env
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
