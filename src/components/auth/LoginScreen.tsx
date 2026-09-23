@@ -2,15 +2,14 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Lock, User, ShieldCheck, Stethoscope, UserCheck, Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { Lock, User, ShieldCheck, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
 export function LoginScreen() {
   const router = useRouter();
   const { login } = useAuth();
-  const [role, setRole] = useState<'doctor' | 'staff' | 'admin'>('doctor');
-  const [username, setUsername] = useState<string>('doctor');
-  const [password, setPassword] = useState<string>('1234');
+  const [username, setUsername] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [rememberMe, setRememberMe] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string>('');
@@ -19,33 +18,30 @@ export function LoginScreen() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+
+    if (!username.trim()) {
+      setErrorMsg('ইউজারনেম অথবা মোবাইল নম্বর লিখুন!');
+      return;
+    }
+    if (!password.trim()) {
+      setErrorMsg('পাসওয়ার্ড লিখুন!');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
-      const success = await login(username, password, role);
+      const success = await login(username.trim(), password.trim());
       if (success) {
         router.push('/dashboard');
       } else {
-        setErrorMsg('ইউজারনেম অথবা পাসওয়ার্ড সঠিক নয়! (Demo: doctor / 1234)');
+        setErrorMsg('ইউজারনেম / মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়!');
       }
     } catch (err: any) {
-      setErrorMsg('Login failed: ' + err.message);
+      setErrorMsg(err.message || 'Login failed');
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const handleQuickFill = (userType: 'doctor' | 'admin') => {
-    if (userType === 'doctor') {
-      setRole('doctor');
-      setUsername('doctor');
-      setPassword('1234');
-    } else {
-      setRole('admin');
-      setUsername('admin');
-      setPassword('admin');
-    }
-    setErrorMsg('');
   };
 
   return (
@@ -68,50 +64,17 @@ export function LoginScreen() {
 
         {/* Form Container */}
         <div className="p-6">
-          {/* Role Selection Tabs */}
-          <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-lg mb-4 text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => {
-                setRole('doctor');
-                setUsername('doctor');
-              }}
-              className={`flex items-center justify-center space-x-1.5 py-2 rounded-md transition ${
-                role === 'doctor'
-                  ? 'bg-blue-700 text-white shadow'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Stethoscope className="w-4 h-4" />
-              <span>Doctor (ডাক্তার)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setRole('staff');
-                setUsername('staff');
-              }}
-              className={`flex items-center justify-center space-x-1.5 py-2 rounded-md transition ${
-                role === 'staff'
-                  ? 'bg-blue-700 text-white shadow'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <UserCheck className="w-4 h-4" />
-              <span>Staff / Receptionist</span>
-            </button>
-          </div>
-
           {errorMsg && (
             <div className="mb-4 p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg font-medium">
               {errorMsg}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-3.5 text-xs">
+          <form onSubmit={handleSubmit} className="space-y-4 text-xs">
             <div>
-              <label className="block text-slate-700 font-semibold mb-1">Username / মোবাইল নং</label>
+              <label className="block text-slate-700 font-semibold mb-1.5">
+                Username অথবা মোবাইল নম্বর (Mobile No.) <span className="text-red-500">*</span>
+              </label>
               <div className="relative">
                 <User className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
                 <input
@@ -119,14 +82,16 @@ export function LoginScreen() {
                   required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="e.g. doctor"
+                  placeholder="e.g. username অথবা 018XXXXXXXX"
                   className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-slate-800 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-slate-700 font-semibold mb-1">Password</label>
+              <label className="block text-slate-700 font-semibold mb-1.5">
+                Password (পাসওয়ার্ড) <span className="text-red-500">*</span>
+              </label>
               <div className="relative">
                 <Lock className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
                 <input
@@ -140,20 +105,21 @@ export function LoginScreen() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  tabIndex={-1}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
 
-            <div className="flex items-center justify-between text-[11px] text-slate-600">
+            <div className="flex items-center justify-between text-[11px] text-slate-600 pt-0.5">
               <label className="flex items-center space-x-1.5 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={rememberMe}
                   onChange={(e) => setRememberMe(e.target.checked)}
-                  className="rounded text-blue-600"
+                  className="rounded text-blue-600 cursor-pointer"
                 />
                 <span>Remember me on this PC</span>
               </label>
@@ -167,32 +133,24 @@ export function LoginScreen() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full py-2.5 bg-gradient-to-r from-blue-700 to-sky-600 hover:from-blue-800 hover:to-sky-700 text-white font-bold rounded-lg shadow-md hover:shadow-lg transition flex items-center justify-center space-x-1.5 disabled:opacity-50"
+              className="w-full py-2.5 bg-gradient-to-r from-blue-700 to-sky-600 hover:from-blue-800 hover:to-sky-700 text-white font-bold rounded-lg shadow-md hover:shadow-lg transition flex items-center justify-center space-x-1.5 disabled:opacity-50 cursor-pointer mt-2"
             >
-              <span>Login to Dashboard</span>
+              <span>{isSubmitting ? 'লগইন হচ্ছে...' : 'Login to Dashboard'}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
 
-          {/* Quick Demo Credentials Footer */}
-          <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-            <span>Quick Fill:</span>
-            <div className="flex space-x-1.5">
-              <button
-                type="button"
-                onClick={() => handleQuickFill('doctor')}
-                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-medium border border-slate-200"
-              >
-                Doctor (1234)
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('admin')}
-                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-medium border border-slate-200"
-              >
-                Admin (admin)
-              </button>
-            </div>
+          {/* Developer Credit */}
+          <div className="mt-5 pt-3 border-t border-slate-100 text-center text-[11px] text-slate-500">
+            <span>Developed & Maintained By </span>
+            <a
+              href="https://webq.com.bd"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-bold text-blue-600 hover:text-blue-800 hover:underline transition inline-flex items-center gap-0.5"
+            >
+              WebQ LTD
+            </a>
           </div>
         </div>
       </div>

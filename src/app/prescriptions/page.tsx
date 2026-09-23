@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { 
   Search, 
   ChevronLeft, 
@@ -16,10 +17,12 @@ import {
 } from 'lucide-react';
 import { db, type Prescription, type Patient } from '@/lib/db';
 
-export default function ViewAllPrescriptionsPage() {
+function PrescriptionsContent() {
+  const searchParams = useSearchParams();
+  const regNoParam = searchParams.get('regNo');
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>(regNoParam || '');
   const [clinicSettings, setClinicSettings] = useState<any>(null);
 
   useEffect(() => {
@@ -27,11 +30,18 @@ export default function ViewAllPrescriptionsPage() {
       const allRx = await db.prescriptions.reverse().toArray();
       setPrescriptions(allRx);
 
+      if (regNoParam) {
+        const foundIdx = allRx.findIndex((r) => r.regNo?.toString() === regNoParam);
+        if (foundIdx !== -1) {
+          setSelectedIndex(foundIdx);
+        }
+      }
+
       const settings = await db.settings.get('default_settings');
       setClinicSettings(settings);
     }
     loadData();
-  }, []);
+  }, [regNoParam]);
 
   const filteredPrescriptions = prescriptions.filter(
     (rx) =>
@@ -309,6 +319,20 @@ export default function ViewAllPrescriptionsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ViewAllPrescriptionsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-8 text-center text-sm font-semibold text-slate-600">
+          ইএমআর রেকর্ড লোড হচ্ছে...
+        </div>
+      }
+    >
+      <PrescriptionsContent />
+    </Suspense>
   );
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
@@ -25,7 +25,9 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
-  HardDrive
+  HardDrive,
+  Users,
+  Award
 } from 'lucide-react';
 import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
@@ -34,21 +36,23 @@ interface NavItem {
   name: string;
   href: string;
   icon: React.ReactNode;
+  allowedRoles?: string[];
 }
 
-const navItems: NavItem[] = [
+const allNavItems: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
-  { name: 'Prescription', href: '/prescription', icon: <FileText className="w-4 h-4" /> },
-  { name: 'View All Prescription', href: '/prescriptions', icon: <Files className="w-4 h-4" /> },
-  { name: 'Drug DB', href: '/drugs', icon: <Pill className="w-4 h-4" /> },
-  { name: 'Template', href: '/templates', icon: <LayoutTemplate className="w-4 h-4" /> },
+  { name: 'Prescription', href: '/prescription', icon: <FileText className="w-4 h-4" />, allowedRoles: ['admin'] },
+  { name: 'View All Prescription', href: '/prescriptions', icon: <Files className="w-4 h-4" />, allowedRoles: ['admin', 'receptionist'] },
+  { name: 'Drug DB', href: '/drugs', icon: <Pill className="w-4 h-4" />, allowedRoles: ['admin'] },
+  { name: 'Template', href: '/templates', icon: <LayoutTemplate className="w-4 h-4" />, allowedRoles: ['admin'] },
   { name: 'Appointment', href: '/appointments', icon: <Calendar className="w-4 h-4" /> },
-  { name: 'Payment & Accounts', href: '/payments', icon: <CreditCard className="w-4 h-4" /> },
-  { name: 'Header Edit', href: '/header-edit', icon: <Heading1 className="w-4 h-4" /> },
-  { name: 'Material & Stock', href: '/materials', icon: <Package className="w-4 h-4" /> },
-  { name: 'Setup', href: '/setup', icon: <Settings className="w-4 h-4" /> },
-  { name: 'Database & Sync', href: '/database', icon: <Database className="w-4 h-4" /> },
-  { name: 'SMS Gateway', href: '/sms', icon: <MessageSquare className="w-4 h-4" /> },
+  { name: 'Payment & Accounts', href: '/payments', icon: <CreditCard className="w-4 h-4" />, allowedRoles: ['admin', 'cashier'] },
+  { name: 'Employee Management', href: '/employees', icon: <Users className="w-4 h-4" />, allowedRoles: ['admin'] },
+  { name: 'Material & Stock', href: '/materials', icon: <Package className="w-4 h-4" />, allowedRoles: ['admin', 'staff'] },
+  { name: 'Header Edit', href: '/header-edit', icon: <Heading1 className="w-4 h-4" />, allowedRoles: ['admin'] },
+  { name: 'Settings', href: '/settings', icon: <Settings className="w-4 h-4" /> },
+  { name: 'Database & Sync', href: '/database', icon: <Database className="w-4 h-4" />, allowedRoles: ['admin'] },
+  { name: 'SMS Gateway', href: '/sms', icon: <MessageSquare className="w-4 h-4" />, allowedRoles: ['admin', 'receptionist'] },
 ];
 
 export function Sidebar() {
@@ -77,12 +81,47 @@ export function Sidebar() {
     };
   }, []);
 
+  const userRole = (user?.role || 'doctor').toLowerCase();
+
+  const filteredNavItems = useMemo(() => {
+    return allNavItems.filter((item) => {
+      // Doctor user strictly sees only Dashboard, Appointment, and Settings
+      if (userRole === 'doctor') {
+        return item.href === '/dashboard' || item.href === '/appointments' || item.href === '/settings';
+      }
+
+      if (userRole === 'admin' || userRole === 'super_admin' || userRole === 'superadmin') {
+        return true;
+      }
+
+      if (!item.allowedRoles) return true;
+      return item.allowedRoles.includes(userRole);
+    });
+  }, [userRole]);
+
   if (!isAuthenticated) return null;
 
   const handleManualSync = async () => {
     setIsSyncing(true);
     await syncEngine.triggerSync();
     setIsSyncing(false);
+  };
+
+  const getRoleLabel = (role: string) => {
+    switch (role) {
+      case 'admin':
+        return 'অ্যাডমিনিস্ট্রেটর';
+      case 'doctor':
+        return 'ডাক্তার';
+      case 'receptionist':
+        return 'রিসেপশনিস্ট';
+      case 'cashier':
+        return 'ক্যাশিয়ার';
+      case 'staff':
+        return 'ক্লিনিক স্টাফ';
+      default:
+        return role;
+    }
   };
 
   return (
@@ -115,19 +154,23 @@ export function Sidebar() {
 
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-1 text-sky-300 hover:text-white hover:bg-white/10 rounded transition"
+            className="p-1 text-sky-300 hover:text-white hover:bg-white/10 rounded transition cursor-pointer"
             title={isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
           >
             {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
           </button>
         </div>
 
-        {/* 2. LOGGED IN DOCTOR PROFILE BANNER */}
+        {/* 2. LOGGED IN USER PROFILE BANNER */}
         {!isCollapsed && user && (
-          <div className="p-3 mx-2 my-2 bg-blue-900/30 rounded-lg border border-sky-500/20 flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-full bg-blue-700 border border-sky-400 flex items-center justify-center text-yellow-300 flex-shrink-0">
-              {user.role === 'doctor' ? (
+          <div className="p-2.5 mx-2 my-2 bg-blue-900/30 rounded-lg border border-sky-500/20 flex items-center space-x-2.5">
+            <div className="w-8 h-8 rounded-full bg-blue-700 border border-sky-400 flex items-center justify-center text-yellow-300 flex-shrink-0 overflow-hidden">
+              {user.avatar ? (
+                <img src={user.avatar} alt="User Avatar" className="w-full h-full object-cover" />
+              ) : userRole === 'doctor' ? (
                 <Stethoscope className="w-4 h-4" />
+              ) : userRole === 'admin' ? (
+                <span className="text-sm">👑</span>
               ) : (
                 <UserCheck className="w-4 h-4 text-sky-300" />
               )}
@@ -135,8 +178,10 @@ export function Sidebar() {
             <div className="min-w-0 flex-1">
               <div className="text-xs font-bold text-white truncate">{user.name}</div>
               <div className="text-[10px] text-sky-300 flex items-center space-x-1">
-                <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                <span>Offline Authorized</span>
+                <span className="px-1.5 py-0.2 bg-blue-800/80 rounded text-[9px] font-semibold text-yellow-300">
+                  {getRoleLabel(userRole)}
+                </span>
+                <span className="text-[9px] text-slate-300">| Offline Ready</span>
               </div>
             </div>
           </div>
@@ -144,11 +189,15 @@ export function Sidebar() {
 
         {/* 3. VERTICAL NAVIGATION MENU */}
         <nav className="p-2 space-y-1 overflow-y-auto max-h-[calc(100vh-280px)]">
-          {navItems.map((item) => {
+          {filteredNavItems.map((item) => {
+            const isSettingsMatch =
+              (item.href === '/settings' || item.href === '/setup') &&
+              (pathname === '/settings' || pathname === '/setup');
             const isActive =
-              item.href === '/dashboard'
+              isSettingsMatch ||
+              (item.href === '/dashboard'
                 ? pathname === '/dashboard' || pathname === '/'
-                : pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href) && item.href !== '/dashboard');
+                : pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href) && item.href !== '/dashboard'));
 
             return (
               <Link
@@ -198,7 +247,7 @@ export function Sidebar() {
                 onClick={handleManualSync}
                 disabled={isSyncing}
                 title="Sync with MongoDB"
-                className="p-1 hover:bg-white/20 rounded transition text-sky-200 disabled:opacity-50"
+                className="p-1 hover:bg-white/20 rounded transition text-sky-200 disabled:opacity-50 cursor-pointer"
               >
                 <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
               </button>
@@ -215,7 +264,7 @@ export function Sidebar() {
               onClick={handleManualSync}
               disabled={isSyncing}
               title="Sync with Cloud"
-              className="p-2 bg-slate-900 rounded-lg border border-white/10 text-sky-300"
+              className="p-2 bg-slate-900 rounded-lg border border-white/10 text-sky-300 cursor-pointer"
             >
               {syncStatus === 'online' ? (
                 <Wifi className="w-4 h-4 text-emerald-400" />
@@ -233,7 +282,7 @@ export function Sidebar() {
               logout();
             }
           }}
-          className={`w-full py-1.5 px-3 bg-red-700/80 hover:bg-red-600 text-white rounded-lg text-xs font-bold transition flex items-center justify-center space-x-2 ${
+          className={`w-full py-1.5 px-3 bg-red-700/80 hover:bg-red-600 text-white rounded-lg text-xs font-bold transition flex items-center justify-center space-x-2 cursor-pointer ${
             isCollapsed ? 'p-2' : ''
           }`}
           title="Log Out"

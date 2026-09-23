@@ -1,6 +1,7 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { SplashScreen } from './SplashScreen';
 import { LoginScreen } from './LoginScreen';
@@ -9,18 +10,31 @@ import { TopBar } from '@/components/TopBar';
 
 export function AuthAppShell({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoadingSplash } = useAuth();
+  const pathname = usePathname();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!isLoadingSplash && isAuthenticated && pathname === '/login') {
+      router.replace('/dashboard');
+    }
+  }, [isAuthenticated, isLoadingSplash, pathname, router]);
 
   // 1. Show Splash Screen on initial startup
   if (isLoadingSplash) {
     return <SplashScreen />;
   }
 
-  // 2. If not authenticated, show Doctor/Staff Login Screen
+  // 2. If not authenticated, show Unified Login Screen
   if (!isAuthenticated) {
     return <LoginScreen />;
   }
 
-  // 3. If authenticated, show full Desktop Application with Left Sidebar, Top Bar & Main Content
+  // 3. If authenticated and still on /login, return null while redirecting
+  if (pathname === '/login') {
+    return null;
+  }
+
+  // 4. If authenticated, show full Desktop Application with Left Sidebar, Top Bar & Main Content
   return (
     <div className="flex h-screen overflow-hidden bg-[#eaf2fb] text-slate-800">
       <Sidebar />

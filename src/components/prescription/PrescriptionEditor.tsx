@@ -21,9 +21,23 @@ import {
   Clock,
   Phone,
   MapPin,
-  Briefcase
+  Briefcase,
+  CheckCircle2,
+  AlertCircle,
+  ArrowRight,
+  Trash2,
+  Edit3,
+  ChevronRight,
+  Activity,
+  Stethoscope,
+  FileText,
+  Check,
+  ShieldCheck,
+  CreditCard,
+  Layers,
+  ChevronLeft
 } from 'lucide-react';
-import { db, type Patient, type Prescription, type Drug, type TemplateItem } from '@/lib/db';
+import { db, type Patient, type Prescription, type Drug, type TemplateItem, type PaymentRecord, type TreatmentSession } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { convertEnglishToBanglaDigits, convertPhoneticToBangla } from '@/lib/banglaPhonetic';
 import { checkMedXDrugInteractions } from '@/lib/medxDrugs';
@@ -31,6 +45,13 @@ import { checkMedXDrugInteractions } from '@/lib/medxDrugs';
 interface PrescriptionEditorProps {
   initialRegNo?: number;
   initialPrescriptionId?: string;
+  initialName?: string;
+  initialAge?: string;
+  initialSex?: string;
+  initialMobile?: string;
+  initialProblem?: string;
+  initialDoctorName?: string;
+  initialAppointmentId?: string;
   onSaved?: (prescriptionId: string) => void;
 }
 
@@ -43,7 +64,33 @@ export interface ToothQuadrant {
 
 export const defaultQuadrant = (): ToothQuadrant => ({ ur: '', ul: '', lr: '', ll: '' });
 
-export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSaved }: PrescriptionEditorProps) {
+export const countQuadrantTeeth = (quad: ToothQuadrant): number => {
+  if (!quad) return 0;
+  const countInStr = (str: string): number => {
+    if (!str) return 0;
+    let count = 0;
+    for (let i = 1; i <= 8; i++) {
+      if (new RegExp(`(^|[^0-9])${i}([^0-9]|$)`).test(str) || str.includes(i.toString())) {
+        count++;
+      }
+    }
+    return count;
+  };
+  return countInStr(quad.ur) + countInStr(quad.ul) + countInStr(quad.lr) + countInStr(quad.ll);
+};
+
+export function PrescriptionEditor({
+  initialRegNo,
+  initialPrescriptionId,
+  initialName,
+  initialAge,
+  initialSex,
+  initialMobile,
+  initialProblem,
+  initialDoctorName,
+  initialAppointmentId,
+  onSaved,
+}: PrescriptionEditorProps) {
   // Patient Details
   const [regNo, setRegNo] = useState<number>(4201);
   const [patientName, setPatientName] = useState<string>('');
@@ -135,11 +182,11 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
 
   // Contract Entry (3 rows default)
   const [contractRows, setContractRows] = useState<
-    { particulars: string; quadrant: ToothQuadrant; price: number }[]
+    { particulars: string; quadrant: ToothQuadrant; price: number; unitPrice?: number }[]
   >([
-    { particulars: '', quadrant: defaultQuadrant(), price: 0 },
-    { particulars: '', quadrant: defaultQuadrant(), price: 0 },
-    { particulars: '', quadrant: defaultQuadrant(), price: 0 },
+    { particulars: '', quadrant: defaultQuadrant(), price: 0, unitPrice: 0 },
+    { particulars: '', quadrant: defaultQuadrant(), price: 0, unitPrice: 0 },
+    { particulars: '', quadrant: defaultQuadrant(), price: 0, unitPrice: 0 },
   ]);
   const [contractNo, setContractNo] = useState<string>('1');
   const [totalBill, setTotalBill] = useState<number>(0);
@@ -148,10 +195,98 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
   const [payableAmount, setPayableAmount] = useState<number>(0);
   const [contractStatus, setContractStatus] = useState<'Open' | 'Closed' | 'In-Progress'>('Open');
 
-  // Payment Entry
+  // Payment Entry & Ledger
   const [paidToday, setPaidToday] = useState<number>(0);
+  const [paymentDate, setPaymentDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [paymentMethod, setPaymentMethod] = useState<string>('Cash');
+  const [paymentNote, setPaymentNote] = useState<string>('');
+  const [patientPayments, setPatientPayments] = useState<PaymentRecord[]>([]);
   const [totalPaid, setTotalPaid] = useState<number>(0);
   const [totalDue, setTotalDue] = useState<number>(0);
+
+  // Treatment Journey & Timeline State
+  const [treatmentSessions, setTreatmentSessions] = useState<TreatmentSession[]>([]);
+  const [showAddSessionModal, setShowAddSessionModal] = useState<boolean>(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [viewingSession, setViewingSession] = useState<TreatmentSession | null>(null);
+  const [sessionStep, setSessionStep] = useState<number>(1);
+  const [sessionForm, setSessionForm] = useState<{
+    sessionNo: number;
+    date: string;
+    time: string;
+    doctor: string;
+    assistant: string;
+    treatmentType: string;
+    teeth: string[];
+    status: 'Completed' | 'In Progress' | 'Scheduled' | 'Planned' | 'Cancelled' | 'Follow-up Required';
+    beforeCondition: string;
+    symptoms: string;
+    diagnosis: string;
+    toothCondition: string;
+    painLevelBefore: number;
+    clinicalFindings: string;
+    xrayScanNote: string;
+    beforePhotos: string[];
+    beforeDoctorNotes: string;
+    procedureName: string;
+    procedureDetails: string;
+    materialsUsed: string;
+    medicationUsed: string;
+    duration: string;
+    treatmentDoctorNotes: string;
+    afterCondition: string;
+    painLevelAfter: number;
+    treatmentResult: string;
+    clinicalObservation: string;
+    postInstructions: string;
+    followUpRequired: boolean;
+    afterPhotos: string[];
+    afterDoctorNotes: string;
+    nextDate: string;
+    nextTreatment: string;
+    nextTeeth: string[];
+    nextPurpose: string;
+    nextInstructions: string;
+    attachments: string[];
+  }>({
+    sessionNo: 1,
+    date: new Date().toISOString().split('T')[0],
+    time: '11:00 AM',
+    doctor: 'ডা. নাহিদ হাসান',
+    assistant: 'স্টাফ নার্স',
+    treatmentType: 'Root Canal Treatment (RCT)',
+    teeth: ['#16'],
+    status: 'Completed',
+    beforeCondition: '',
+    symptoms: '',
+    diagnosis: '',
+    toothCondition: '',
+    painLevelBefore: 6,
+    clinicalFindings: '',
+    xrayScanNote: '',
+    beforePhotos: [],
+    beforeDoctorNotes: '',
+    procedureName: 'Root Canal Treatment (RCT)',
+    procedureDetails: '',
+    materialsUsed: '',
+    medicationUsed: '',
+    duration: '45 mins',
+    treatmentDoctorNotes: '',
+    afterCondition: '',
+    painLevelAfter: 1,
+    treatmentResult: '',
+    clinicalObservation: '',
+    postInstructions: '',
+    followUpRequired: false,
+    afterPhotos: [],
+    afterDoctorNotes: '',
+    nextDate: '',
+    nextTreatment: '',
+    nextTeeth: [],
+    nextPurpose: '',
+    nextInstructions: '',
+    attachments: [],
+  });
 
   // Report Entry (3 rows)
   const [reportRows, setReportRows] = useState<
@@ -217,9 +352,74 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
   const [activeDrugIndex, setActiveDrugIndex] = useState<number | null>(null);
   const [drugHistoryQuery, setDrugHistoryQuery] = useState<string>('');
   const [activeDrugHistoryIndex, setActiveDrugHistoryIndex] = useState<number | null>(null);
+  const [activeContractIndex, setActiveContractIndex] = useState<number | null>(null);
+  const [contractSearchQuery, setContractSearchQuery] = useState<string>('');
   const [showTemplateModal, setShowTemplateModal] = useState<boolean>(false);
   const [templateModalType, setTemplateModalType] = useState<string>('drug');
   const [previewModalOpen, setPreviewModalOpen] = useState<boolean>(false);
+  const [toothModalData, setToothModalData] = useState<{
+    sectionKey: string;
+    sectionTitle: string;
+    index: number;
+    activeQuad: 'ur' | 'ul' | 'lr' | 'll';
+    workingQuadrant: ToothQuadrant;
+    onSave: (savedQuadrant: ToothQuadrant) => void;
+  } | null>(null);
+
+  const openToothPicker = (
+    sectionKey: string,
+    sectionTitle: string,
+    index: number,
+    quadKey: 'ur' | 'ul' | 'lr' | 'll',
+    currentQuadrant: ToothQuadrant,
+    onSave: (saved: ToothQuadrant) => void
+  ) => {
+    setToothModalData({
+      sectionKey,
+      sectionTitle,
+      index,
+      activeQuad: quadKey,
+      workingQuadrant: { ...currentQuadrant },
+      onSave,
+    });
+  };
+
+  // Calculate contract row price: treatment cost is for 1 single tooth * number of selected teeth
+  const calculateContractRowPrice = (
+    row: { particulars: string; quadrant: ToothQuadrant; price: number; unitPrice?: number },
+    newQuadrant?: ToothQuadrant,
+    newUnitPrice?: number
+  ) => {
+    const quad = newQuadrant || row.quadrant;
+    const teethCount = countQuadrantTeeth(quad);
+    const multiplier = teethCount > 0 ? teethCount : 1;
+
+    // Treatment cost is strictly for 1 tooth (no division)
+    let singleToothCost = newUnitPrice !== undefined && newUnitPrice > 0 ? newUnitPrice : row.unitPrice;
+    if (!singleToothCost || singleToothCost <= 0) {
+      if (row.particulars) {
+        const tmpl = allTemplates.find(
+          (t) =>
+            (t.type === 'cost' || t.type === 'cost_auto' || t.type === 'treatment' || t.type === 'treatment_auto') &&
+            t.name.trim().toLowerCase() === row.particulars.trim().toLowerCase()
+        );
+        if (tmpl && tmpl.price && tmpl.price > 0) {
+          singleToothCost = tmpl.price;
+        } else {
+          singleToothCost = row.price || 0;
+        }
+      } else {
+        singleToothCost = row.price || 0;
+      }
+    }
+
+    const finalPrice = (singleToothCost || 0) * multiplier;
+    return {
+      price: finalPrice,
+      unitPrice: singleToothCost || 0,
+      teethCount,
+    };
+  };
   const [printMode, setPrintMode] = useState<'full' | 'without_header'>('full');
   const [clinicSettings, setClinicSettings] = useState<any>(null);
   const [printHeaderMarginCm, setPrintHeaderMarginCm] = useState<number>(5.6);
@@ -314,19 +514,90 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
       const templates = await db.templates.toArray();
       setAllTemplates(templates);
 
-      if (initialRegNo) {
-        loadPatientByRegNo(initialRegNo);
+      let loadedRx: Prescription | undefined = undefined;
+      if (initialPrescriptionId) {
+        loadedRx = await db.prescriptions.get(initialPrescriptionId);
+      } else if (initialRegNo) {
+        const existingRx = await db.prescriptions.where('regNo').equals(initialRegNo).last();
+        if (existingRx && initialAppointmentId) {
+          const ap = await db.appointments.get(initialAppointmentId);
+          if (ap?.prescriptionId || ap?.status === 'Completed') {
+            loadedRx = existingRx;
+          }
+        }
+      }
+
+      if (loadedRx) {
+        if (loadedRx.regNo) setRegNo(loadedRx.regNo);
+        if (loadedRx.patientName) setPatientName(loadedRx.patientName);
+        if (loadedRx.age) setAge(loadedRx.age);
+        if (loadedRx.sex) setSex(loadedRx.sex);
+        if (loadedRx.mobile) setMobile(loadedRx.mobile);
+        if (loadedRx.address) setAddress(loadedRx.address);
+        if (loadedRx.occupation) setOccupation(loadedRx.occupation);
+        if (loadedRx.date) setDate(loadedRx.date);
+        if (loadedRx.visitNo) setVisitNo(loadedRx.visitNo);
+        if (loadedRx.referredBy) setReferredBy(loadedRx.referredBy);
+        if (loadedRx.cc && loadedRx.cc.length > 0) setCcList(loadedRx.cc);
+        if (loadedRx.ho) setHo(loadedRx.ho);
+        if (loadedRx.hoCustomText) setHoCustomText(loadedRx.hoCustomText);
+        if (loadedRx.oe && loadedRx.oe.length > 0) setOeList(loadedRx.oe);
+        if (loadedRx.ix && loadedRx.ix.length > 0) setIxList(loadedRx.ix);
+        if (loadedRx.dd && loadedRx.dd.length > 0) setDdList(loadedRx.dd);
+        if (loadedRx.dx && loadedRx.dx.length > 0) setDxList(loadedRx.dx);
+        if (loadedRx.treatmentPlan && loadedRx.treatmentPlan.length > 0) setTreatmentPlanList(loadedRx.treatmentPlan);
+        if (loadedRx.treatmentDone && loadedRx.treatmentDone.length > 0) setTreatmentDoneList(loadedRx.treatmentDone);
+        if (loadedRx.specialNote && loadedRx.specialNote.length > 0) setSpecialNoteList(loadedRx.specialNote);
+        if (loadedRx.drugHistory && loadedRx.drugHistory.length > 0) setDrugHistoryList(loadedRx.drugHistory);
+        if (loadedRx.medicines && loadedRx.medicines.length > 0) setMedicines(loadedRx.medicines);
+        if (loadedRx.advice && loadedRx.advice.length > 0) setAdviceList(loadedRx.advice);
+        if (loadedRx.nextVisitDate) setNextVisitDate(loadedRx.nextVisitDate);
+        if (loadedRx.revisitText) setRevisitOption(loadedRx.revisitText);
+        if (loadedRx.timeSlot) setNextVisitTime(loadedRx.timeSlot);
+        await loadPatientFinancialsAndJourney(loadedRx.regNo);
       } else {
-        const lastPrescription = await db.prescriptions.orderBy('regNo').last();
-        if (lastPrescription) {
-          setRegNo(lastPrescription.regNo + 1);
+        if (initialRegNo) {
+          setRegNo(initialRegNo);
+          await loadPatientByRegNo(initialRegNo);
+        } else {
+          const lastPrescription = await db.prescriptions.orderBy('regNo').last();
+          if (lastPrescription) {
+            setRegNo(lastPrescription.regNo + 1);
+          }
+        }
+
+        // Pre-fill patient details from appointment if provided
+        if (initialName) setPatientName(initialName);
+        if (initialAge) setAge(initialAge);
+        if (initialSex) setSex(initialSex);
+        if (initialMobile) setMobile(initialMobile);
+        if (initialProblem && initialProblem.trim()) {
+          setCcList([initialProblem.trim()]);
         }
       }
     }
     loadData();
-  }, [initialRegNo]);
+  }, [initialRegNo, initialPrescriptionId, initialAppointmentId, initialName, initialAge, initialSex, initialMobile, initialProblem]);
 
-  // Recalculate Financials
+  // Load Payments and Treatment Sessions for active RegNo
+  const loadPatientFinancialsAndJourney = async (searchReg: number) => {
+    try {
+      const pmts = await db.payments.where('regNo').equals(Number(searchReg)).toArray();
+      setPatientPayments(pmts);
+      const sessions = await db.treatmentSessions.where('regNo').equals(Number(searchReg)).sortBy('sessionNo');
+      setTreatmentSessions(sessions);
+    } catch (e) {
+      console.warn('Error loading patient financials and journey:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (regNo) {
+      loadPatientFinancialsAndJourney(regNo);
+    }
+  }, [regNo]);
+
+  // Recalculate Financials from Contract and Ledger
   useEffect(() => {
     const sumPrice = contractRows.reduce((acc, row) => acc + (Number(row.price) || 0), 0);
     setTotalBill(sumPrice);
@@ -339,10 +610,11 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
     }
     setPayableAmount(payable);
 
-    const paid = Number(paidToday) || 0;
-    setTotalPaid(paid);
-    setTotalDue(Math.max(0, payable - paid));
-  }, [contractRows, discountTk, discountPercent, paidToday]);
+    // Calculate Total Paid strictly from actual stored payment transactions in the database
+    const ledgerPaid = patientPayments.reduce((acc, p) => acc + (Number(p.paidAmount) || 0), 0);
+    setTotalPaid(ledgerPaid);
+    setTotalDue(Math.max(0, payable - ledgerPaid));
+  }, [contractRows, discountTk, discountPercent, patientPayments]);
 
   const loadPatientByRegNo = async (searchReg: number) => {
     const patient = await db.patients.where('regNo').equals(Number(searchReg)).first();
@@ -358,6 +630,235 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
       const pastPrescriptions = await db.prescriptions.where('regNo').equals(Number(searchReg)).toArray();
       setPatientPastPrescriptions(pastPrescriptions);
       setVisitNo(pastPrescriptions.length + 1);
+
+      await loadPatientFinancialsAndJourney(patient.regNo);
+    }
+  };
+
+  // Add Payment Transaction to Database immediately
+  const handleAddPayment = async () => {
+    const amount = Number(paidToday) || 0;
+    if (amount <= 0) {
+      alert('অনুগ্রহ করে জমা টাকার পরিমাণ (Paid Amount) লিখুন!');
+      return;
+    }
+
+    const currentLedgerPaid = patientPayments.reduce((acc, p) => acc + (Number(p.paidAmount) || 0), 0);
+    const newTotalPaid = currentLedgerPaid + amount;
+    const newDue = Math.max(0, payableAmount - newTotalPaid);
+
+    const paymentRecord: PaymentRecord = {
+      id: `pay_${regNo}_${Date.now()}`,
+      regNo: Number(regNo),
+      name: patientName || 'Patient',
+      mobile: mobile || '',
+      date: paymentDate || new Date().toISOString().split('T')[0],
+      particulars: paymentNote.trim() || contractRows[0]?.particulars || 'Treatment Payment',
+      totalBill: payableAmount,
+      discount: discountTk,
+      payableAmount: payableAmount,
+      paidAmount: amount,
+      dueAmount: newDue,
+      method: paymentMethod || 'Cash',
+      note: paymentNote.trim(),
+      addedBy: clinicSettings?.doctor1?.name ? clinicSettings.doctor1.name.split(' ')[0] : 'Admin',
+      status: 'Paid',
+      createdAt: new Date().toISOString(),
+    };
+
+    await db.payments.put(paymentRecord);
+    await syncEngine.logMutation('payments', 'INSERT', paymentRecord.id, paymentRecord);
+
+    const updatedPmts = await db.payments.where('regNo').equals(Number(regNo)).toArray();
+    setPatientPayments(updatedPmts);
+    setPaidToday(0);
+    setPaymentNote('');
+  };
+
+  // Delete Payment Transaction
+  const handleDeletePayment = async (paymentId: string) => {
+    if (confirm('আপনি কি এই পেমেন্ট ট্রানজ্যাকশনটি মুছে ফেলতে চান?')) {
+      await db.payments.delete(paymentId);
+      await syncEngine.logMutation('payments', 'DELETE', paymentId, { id: paymentId });
+      const updatedPmts = await db.payments.where('regNo').equals(Number(regNo)).toArray();
+      setPatientPayments(updatedPmts);
+    }
+  };
+
+  // Treatment Journey Modal Openers
+  const handleOpenAddSessionModal = () => {
+    setEditingSessionId(null);
+    setSessionStep(1);
+    setSessionForm({
+      sessionNo: treatmentSessions.length + 1,
+      date: new Date().toISOString().split('T')[0],
+      time: '11:00 AM',
+      doctor: clinicSettings?.doctor1?.name || 'ডা. নাহিদ হাসান',
+      assistant: 'স্টাফ নার্স',
+      treatmentType: contractRows.find((r) => r.particulars)?.particulars || 'Root Canal Treatment (RCT)',
+      teeth: ['#16'],
+      status: 'Completed',
+      beforeCondition: 'Severe deep caries, tender on percussion, cold sensitivity.',
+      symptoms: 'Throbbing pain, night pain',
+      diagnosis: 'Acute Irreversible Pulpitis',
+      toothCondition: 'Carious pulp exposure',
+      painLevelBefore: 7,
+      clinicalFindings: 'Deep occlusion cavity with tenderness',
+      xrayScanNote: 'IOPA shows radiolucency reaching pulp with PDL widening',
+      beforePhotos: [],
+      beforeDoctorNotes: '',
+      procedureName: contractRows.find((r) => r.particulars)?.particulars || 'Root Canal Treatment (RCT)',
+      procedureDetails: 'Access opening done under local anesthesia, pulp extirpation completed, biomechanical preparation done, Ca(OH)2 dressing placed with Cavit.',
+      materialsUsed: 'Lignox 2%, K-Files, NaOCl 3%, EDTA, Ca(OH)2, Cavit G',
+      medicationUsed: 'Tab. Axicef Plus, Tab. Rolac',
+      duration: '45 mins',
+      treatmentDoctorNotes: 'Canals located successfully. Working length established.',
+      afterCondition: 'Patient comfortable, symptoms subsided',
+      painLevelAfter: 1,
+      treatmentResult: 'Access cavity prepared and dressed successfully',
+      clinicalObservation: 'No bleeding or swelling observed post-op',
+      postInstructions: 'Do not chew hard foods on this side for 1 hour. Take prescribed painkillers if mild pain occurs.',
+      followUpRequired: true,
+      afterPhotos: [],
+      afterDoctorNotes: 'Next appointment scheduled for obturation.',
+      nextDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      nextTreatment: 'Biomechanical Preparation & Obturation',
+      nextTeeth: ['#16'],
+      nextPurpose: 'Canal obturation with Gutta-Percha points',
+      nextInstructions: 'Eat food before coming to next session',
+      attachments: [],
+    });
+    setShowAddSessionModal(true);
+  };
+
+  const handleOpenEditSessionModal = (session: TreatmentSession) => {
+    setEditingSessionId(session.id);
+    setSessionStep(1);
+    setSessionForm({
+      sessionNo: session.sessionNo,
+      date: session.date,
+      time: session.time || '',
+      doctor: session.doctor || '',
+      assistant: session.assistant || '',
+      treatmentType: session.treatmentType,
+      teeth: session.teeth || [],
+      status: session.status,
+      beforeCondition: session.beforeCondition || '',
+      symptoms: session.symptoms || '',
+      diagnosis: session.diagnosis || '',
+      toothCondition: session.toothCondition || '',
+      painLevelBefore: session.painLevelBefore ?? 5,
+      clinicalFindings: session.clinicalFindings || '',
+      xrayScanNote: session.xrayScanNote || '',
+      beforePhotos: session.beforePhotos || [],
+      beforeDoctorNotes: session.beforeDoctorNotes || '',
+      procedureName: session.procedureName || session.treatmentType,
+      procedureDetails: session.procedureDetails || '',
+      materialsUsed: session.materialsUsed || '',
+      medicationUsed: session.medicationUsed || '',
+      duration: session.duration || '',
+      treatmentDoctorNotes: session.treatmentDoctorNotes || '',
+      afterCondition: session.afterCondition || '',
+      painLevelAfter: session.painLevelAfter ?? 0,
+      treatmentResult: session.treatmentResult || '',
+      clinicalObservation: session.clinicalObservation || '',
+      postInstructions: session.postInstructions || '',
+      followUpRequired: !!session.followUpRequired,
+      afterPhotos: session.afterPhotos || [],
+      afterDoctorNotes: session.afterDoctorNotes || '',
+      nextDate: session.nextDate || '',
+      nextTreatment: session.nextTreatment || '',
+      nextTeeth: session.nextTeeth || [],
+      nextPurpose: session.nextPurpose || '',
+      nextInstructions: session.nextInstructions || '',
+      attachments: session.attachments || [],
+    });
+    setShowAddSessionModal(true);
+  };
+
+  const handleToggleToothInSession = (toothNumber: string) => {
+    const currentTeeth = sessionForm.teeth || [];
+    if (currentTeeth.includes(toothNumber)) {
+      setSessionForm({
+        ...sessionForm,
+        teeth: currentTeeth.filter((t) => t !== toothNumber),
+      });
+    } else {
+      setSessionForm({
+        ...sessionForm,
+        teeth: [...currentTeeth, toothNumber],
+      });
+    }
+  };
+
+  const handleSaveTreatmentSession = async () => {
+    if (!sessionForm.treatmentType.trim()) {
+      alert('চিকিৎসার ধরণ (Treatment Type / Procedure) লিখুন!');
+      return;
+    }
+
+    const sessionId = editingSessionId || `session_${regNo}_${Date.now()}`;
+    const newSession: TreatmentSession = {
+      id: sessionId,
+      regNo: Number(regNo),
+      sessionNo: Number(sessionForm.sessionNo) || treatmentSessions.length + 1,
+      date: sessionForm.date || new Date().toISOString().split('T')[0],
+      time: sessionForm.time || '',
+      doctor: sessionForm.doctor || '',
+      assistant: sessionForm.assistant || '',
+      treatmentType: sessionForm.treatmentType.trim(),
+      teeth: sessionForm.teeth || [],
+      status: sessionForm.status || 'Completed',
+      beforeCondition: sessionForm.beforeCondition,
+      symptoms: sessionForm.symptoms,
+      diagnosis: sessionForm.diagnosis,
+      toothCondition: sessionForm.toothCondition,
+      painLevelBefore: sessionForm.painLevelBefore,
+      clinicalFindings: sessionForm.clinicalFindings,
+      xrayScanNote: sessionForm.xrayScanNote,
+      beforePhotos: sessionForm.beforePhotos,
+      beforeDoctorNotes: sessionForm.beforeDoctorNotes,
+      procedureName: sessionForm.procedureName || sessionForm.treatmentType,
+      procedureDetails: sessionForm.procedureDetails,
+      materialsUsed: sessionForm.materialsUsed,
+      medicationUsed: sessionForm.medicationUsed,
+      duration: sessionForm.duration,
+      treatmentDoctorNotes: sessionForm.treatmentDoctorNotes,
+      afterCondition: sessionForm.afterCondition,
+      painLevelAfter: sessionForm.painLevelAfter,
+      treatmentResult: sessionForm.treatmentResult,
+      clinicalObservation: sessionForm.clinicalObservation,
+      postInstructions: sessionForm.postInstructions,
+      followUpRequired: sessionForm.followUpRequired,
+      afterPhotos: sessionForm.afterPhotos,
+      afterDoctorNotes: sessionForm.afterDoctorNotes,
+      nextDate: sessionForm.nextDate,
+      nextTreatment: sessionForm.nextTreatment,
+      nextTeeth: sessionForm.nextTeeth,
+      nextPurpose: sessionForm.nextPurpose,
+      nextInstructions: sessionForm.nextInstructions,
+      attachments: sessionForm.attachments,
+      createdAt: new Date().toISOString(),
+    };
+
+    await db.treatmentSessions.put(newSession);
+    await syncEngine.logMutation('treatmentSessions' as any, editingSessionId ? 'UPDATE' : 'INSERT', newSession.id, newSession);
+
+    const updatedSessions = await db.treatmentSessions.where('regNo').equals(Number(regNo)).sortBy('sessionNo');
+    setTreatmentSessions(updatedSessions);
+    setShowAddSessionModal(false);
+    setEditingSessionId(null);
+  };
+
+  const handleDeleteTreatmentSession = async (sessionId: string) => {
+    if (confirm('আপনি কি এই চিকিৎসা সেশনটি মুছে ফেলতে চান?')) {
+      await db.treatmentSessions.delete(sessionId);
+      await syncEngine.logMutation('treatmentSessions' as any, 'DELETE', sessionId, { id: sessionId });
+      const updatedSessions = await db.treatmentSessions.where('regNo').equals(Number(regNo)).sortBy('sessionNo');
+      setTreatmentSessions(updatedSessions);
+      if (viewingSession?.id === sessionId) {
+        setViewingSession(null);
+      }
     }
   };
 
@@ -419,15 +920,178 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
     if ('duration' in drug && drug.duration) autoDuration = drug.duration;
 
     const updated = [...medicines];
-    updated[index] = {
+    const newMed = {
       ...updated[index],
       brand: brandName,
       dose: autoDose || updated[index].dose || '১+০+১',
       instruction: autoInstruction || updated[index].instruction || 'খাবারের পর',
       duration: autoDuration || updated[index].duration || '০৫ দিন',
     };
+    updated[index] = newMed;
     setMedicines(updated);
     setActiveDrugIndex(null);
+    autoSaveSingleMedicine(newMed);
+  };
+
+  // Auto-save a medicine entry to templates immediately (like C/C auto-saves)
+  const autoSaveSingleMedicine = async (med: {
+    brand: string;
+    dose?: string;
+    instruction?: string;
+    duration?: string;
+  }) => {
+    const brandName = med.brand.trim();
+    if (!brandName || brandName.length < 2) return;
+
+    const content = JSON.stringify({
+      dose: med.dose?.trim() || '১+০+১',
+      instruction: med.instruction?.trim() || 'খাবারের পর',
+      duration: med.duration?.trim() || '০৫ দিন',
+    });
+
+    try {
+      const currentTemplates = await db.templates.toArray();
+      const existing = currentTemplates.find(
+        (t) =>
+          (t.type === 'drug_auto' || t.type === 'drug') &&
+          t.name.trim().toLowerCase() === brandName.toLowerCase()
+      );
+
+      if (existing) {
+        const newCount = (existing.count || 1) + 1;
+        await db.templates.update(existing.id, { count: newCount, content });
+        await syncEngine.logMutation('templates', 'UPDATE', existing.id, { ...existing, count: newCount, content });
+      } else {
+        const newItem: TemplateItem = {
+          id: `tmpl_drug_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          type: 'drug_auto',
+          name: brandName,
+          content,
+          count: 1,
+        };
+        await db.templates.put(newItem);
+        await syncEngine.logMutation('templates', 'INSERT', newItem.id, newItem);
+      }
+
+      const freshTemplates = await db.templates.toArray();
+      setAllTemplates(freshTemplates);
+    } catch (err) {
+      console.error('Error auto-saving medicine template:', err);
+    }
+  };
+
+  // Auto-save a single advice entry to templates immediately (like C/C auto-saves)
+  const autoSaveSingleAdvice = async (adviceText: string) => {
+    const trimmed = adviceText.trim();
+    if (!trimmed || trimmed.length < 2) return;
+
+    try {
+      const currentTemplates = await db.templates.toArray();
+      const existing = currentTemplates.find(
+        (t) =>
+          (t.type === 'advice_auto' || t.type === 'advice') &&
+          (t.name.trim().toLowerCase() === trimmed.toLowerCase() ||
+           (t.content && t.content.trim().toLowerCase() === trimmed.toLowerCase()))
+      );
+
+      if (existing) {
+        const newCount = (existing.count || 1) + 1;
+        await db.templates.update(existing.id, { count: newCount });
+        await syncEngine.logMutation('templates', 'UPDATE', existing.id, { ...existing, count: newCount });
+      } else {
+        const newItem: TemplateItem = {
+          id: `tmpl_advice_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          type: 'advice_auto',
+          name: trimmed,
+          content: trimmed,
+          count: 1,
+        };
+        await db.templates.put(newItem);
+        await syncEngine.logMutation('templates', 'INSERT', newItem.id, newItem);
+      }
+
+      const freshTemplates = await db.templates.toArray();
+      setAllTemplates(freshTemplates);
+    } catch (err) {
+      console.error('Error auto-saving advice template:', err);
+    }
+  };
+
+  // Auto-save a procedure and cost to templates immediately (like C/C auto-saves)
+  const autoSaveContractProcedure = async (procedureName: string, price?: number) => {
+    const trimmed = procedureName.trim();
+    if (!trimmed || trimmed.length < 2) return;
+
+    try {
+      const currentTemplates = await db.templates.toArray();
+      const existing = currentTemplates.find(
+        (t) =>
+          (t.type === 'cost' || t.type === 'cost_auto' || t.type === 'treatment' || t.type === 'treatment_auto') &&
+          t.name.trim().toLowerCase() === trimmed.toLowerCase()
+      );
+
+      if (existing) {
+        const newCount = (existing.count || 1) + 1;
+        const updatedItem = {
+          ...existing,
+          count: newCount,
+          price: price !== undefined && price > 0 ? price : existing.price,
+        };
+        await db.templates.update(existing.id, updatedItem);
+        await syncEngine.logMutation('templates', 'UPDATE', existing.id, updatedItem);
+      } else {
+        const newItem: TemplateItem = {
+          id: `tmpl_cost_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          type: 'cost',
+          name: trimmed,
+          price: price && price > 0 ? price : 0,
+          count: 1,
+        };
+        await db.templates.put(newItem);
+        await syncEngine.logMutation('templates', 'INSERT', newItem.id, newItem);
+      }
+
+      const freshTemplates = await db.templates.toArray();
+      setAllTemplates(freshTemplates);
+    } catch (err) {
+      console.error('Error auto-saving contract procedure template:', err);
+    }
+  };
+
+  // Auto-save Drug History immediately (like C/C & Advice auto-saves)
+  const autoSaveSingleDrugHistory = async (drugHistoryText: string) => {
+    const trimmed = drugHistoryText.trim();
+    if (!trimmed || trimmed.length < 2) return;
+
+    try {
+      const currentTemplates = await db.templates.toArray();
+      const existing = currentTemplates.find(
+        (t) =>
+          (t.type === 'drughistory_auto' || t.type === 'drughistory') &&
+          (t.name.trim().toLowerCase() === trimmed.toLowerCase() ||
+            (t.content && t.content.trim().toLowerCase() === trimmed.toLowerCase()))
+      );
+
+      if (existing) {
+        const newCount = (existing.count || 1) + 1;
+        await db.templates.update(existing.id, { count: newCount });
+        await syncEngine.logMutation('templates', 'UPDATE', existing.id, { ...existing, count: newCount });
+      } else {
+        const newItem: TemplateItem = {
+          id: `tmpl_dh_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          type: 'drughistory_auto',
+          name: trimmed,
+          count: 1,
+        };
+        await db.templates.put(newItem);
+        await syncEngine.logMutation('templates', 'INSERT', newItem.id, newItem);
+      }
+
+      const freshTemplates = await db.templates.toArray();
+      setAllTemplates(freshTemplates);
+    } catch (err) {
+      console.error('Error auto-saving drug history template:', err);
+    }
   };
 
   // Save Prescription (Offline + Auto-Sync)
@@ -437,7 +1101,7 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
       return;
     }
 
-    const prescriptionId = `rx_${regNo}_${visitNo}_${Date.now()}`;
+    const prescriptionId = initialPrescriptionId || `rx_${regNo}_${visitNo}_${Date.now()}`;
 
     // 1. Save or Update Patient Record in local DB
     const patientId = `p_${regNo}`;
@@ -523,7 +1187,7 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
 
     // Save to Local IndexedDB
     await db.prescriptions.put(prescriptionData);
-    await syncEngine.logMutation('prescriptions', 'INSERT', prescriptionId, prescriptionData);
+    await syncEngine.logMutation('prescriptions', initialPrescriptionId ? 'UPDATE' : 'INSERT', prescriptionId, prescriptionData);
 
     // If payment made, record in Payments table
     if (paidToday > 0) {
@@ -622,11 +1286,29 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
     await autoSaveItemsToTemplates(treatmentDoneList, 'treatment');
     await autoSaveItemsToTemplates(specialNoteList, 'note_auto');
     await autoSaveItemsToTemplates(adviceList, 'advice_auto');
+    await autoSaveItemsToTemplates(drugHistoryList, 'drughistory_auto');
     await autoSaveMedicinesToTemplates(medicines.filter((m) => m.brand.trim() !== ''));
+
+    // Auto-save Contract Entry procedures & costs into treatment cost templates
+    for (const cRow of contractRows) {
+      if (cRow.particulars && cRow.particulars.trim().length >= 2) {
+        await autoSaveContractProcedure(cRow.particulars, cRow.price);
+      }
+    }
 
     // Refresh active templates in memory for immediate suggestion availability
     const refreshedTemplates = await db.templates.toArray();
     setAllTemplates(refreshedTemplates);
+
+    // If initiated from an appointment, mark appointment as Completed and link prescriptionId
+    if (initialAppointmentId) {
+      try {
+        await db.appointments.update(initialAppointmentId, { status: 'Completed', prescriptionId });
+        await syncEngine.logMutation('appointments', 'UPDATE', initialAppointmentId, { status: 'Completed', prescriptionId });
+      } catch (err) {
+        console.warn('Could not mark appointment completed:', err);
+      }
+    }
 
     if (onSaved) {
       onSaved(prescriptionId);
@@ -639,7 +1321,7 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
         window.print();
       }, 500);
     } else {
-      alert('প্রেসক্রিপশন সফলভাবে অফলাইনে সেভ হয়েছে! ইন্টারনেট থাকলে লাইভ ডাটাবেজে অটো সিঙ্ক হবে।');
+      alert(initialPrescriptionId ? 'প্রেসক্রিপশন সফলভাবে আপডেট করা হয়েছে!' : 'প্রেসক্রিপশন সফলভাবে অফলাইনে সেভ হয়েছে! ইন্টারনেট থাকলে লাইভ ডাটাবেজে অটো সিঙ্ক হবে।');
     }
   };
 
@@ -686,9 +1368,9 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
     ]);
     setAdviceList(['', '', '', '', '']);
     setContractRows([
-      { particulars: '', quadrant: defaultQuadrant(), price: 0 },
-      { particulars: '', quadrant: defaultQuadrant(), price: 0 },
-      { particulars: '', quadrant: defaultQuadrant(), price: 0 },
+      { particulars: '', quadrant: defaultQuadrant(), price: 0, unitPrice: 0 },
+      { particulars: '', quadrant: defaultQuadrant(), price: 0, unitPrice: 0 },
+      { particulars: '', quadrant: defaultQuadrant(), price: 0, unitPrice: 0 },
     ]);
     setPaidToday(0);
     setDiscountTk(0);
@@ -843,7 +1525,7 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                     )}
                   </div>
 
-                  <div className="w-24 flex-shrink-0 border border-slate-300 bg-[#eef3f8] rounded overflow-hidden flex flex-col justify-between">
+                  <div className="w-24 flex-shrink-0 border border-slate-300 bg-[#eef3f8] rounded overflow-hidden flex flex-col justify-between shadow-xs">
                     <div className="flex border-b border-slate-300 flex-1">
                       <input
                         type="text"
@@ -853,9 +1535,16 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                           q[i] = { ...quad, ur: e.target.value };
                           setQuadrants(q);
                         }}
-                        title="Upper Right (UR)"
+                        onClick={() =>
+                          openToothPicker(sectionKey, title, i, 'ur', quad, (newQ) => {
+                            const updated = [...quadrants];
+                            updated[i] = newQ;
+                            setQuadrants(updated);
+                          })
+                        }
+                        title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (UR - Upper Right)"
                         placeholder="UR"
-                        className="w-1/2 text-center text-[10px] font-mono border-r border-slate-300 bg-transparent focus:bg-white focus:outline-none"
+                        className="w-1/2 text-center text-[10px] font-mono border-r border-slate-300 bg-transparent hover:bg-sky-100 hover:text-blue-900 cursor-pointer font-bold focus:bg-white focus:outline-none transition"
                       />
                       <input
                         type="text"
@@ -865,9 +1554,16 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                           q[i] = { ...quad, ul: e.target.value };
                           setQuadrants(q);
                         }}
-                        title="Upper Left (UL)"
+                        onClick={() =>
+                          openToothPicker(sectionKey, title, i, 'ul', quad, (newQ) => {
+                            const updated = [...quadrants];
+                            updated[i] = newQ;
+                            setQuadrants(updated);
+                          })
+                        }
+                        title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (UL - Upper Left)"
                         placeholder="UL"
-                        className="w-1/2 text-center text-[10px] font-mono bg-transparent focus:bg-white focus:outline-none"
+                        className="w-1/2 text-center text-[10px] font-mono bg-transparent hover:bg-sky-100 hover:text-blue-900 cursor-pointer font-bold focus:bg-white focus:outline-none transition"
                       />
                     </div>
                     <div className="flex flex-1">
@@ -879,9 +1575,16 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                           q[i] = { ...quad, lr: e.target.value };
                           setQuadrants(q);
                         }}
-                        title="Lower Right (LR)"
+                        onClick={() =>
+                          openToothPicker(sectionKey, title, i, 'lr', quad, (newQ) => {
+                            const updated = [...quadrants];
+                            updated[i] = newQ;
+                            setQuadrants(updated);
+                          })
+                        }
+                        title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (LR - Lower Right)"
                         placeholder="LR"
-                        className="w-1/2 text-center text-[10px] font-mono border-r border-slate-300 bg-transparent focus:bg-white focus:outline-none"
+                        className="w-1/2 text-center text-[10px] font-mono border-r border-slate-300 bg-transparent hover:bg-sky-100 hover:text-blue-900 cursor-pointer font-bold focus:bg-white focus:outline-none transition"
                       />
                       <input
                         type="text"
@@ -891,9 +1594,16 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                           q[i] = { ...quad, ll: e.target.value };
                           setQuadrants(q);
                         }}
-                        title="Lower Left (LL)"
+                        onClick={() =>
+                          openToothPicker(sectionKey, title, i, 'll', quad, (newQ) => {
+                            const updated = [...quadrants];
+                            updated[i] = newQ;
+                            setQuadrants(updated);
+                          })
+                        }
+                        title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (LL - Lower Left)"
                         placeholder="LL"
-                        className="w-1/2 text-center text-[10px] font-mono bg-transparent focus:bg-white focus:outline-none"
+                        className="w-1/2 text-center text-[10px] font-mono bg-transparent hover:bg-sky-100 hover:text-blue-900 cursor-pointer font-bold focus:bg-white focus:outline-none transition"
                       />
                     </div>
                   </div>
@@ -1219,93 +1929,231 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                 </button>
               </div>
               <div className="p-1.5 space-y-1.5 bg-[#f0f4f9]">
-                {drugHistoryList.map((dh, i) => (
-                  <div key={i} className="flex items-center gap-1 relative">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const updated = [...drugHistoryList];
-                        updated[i] = '';
-                        setDrugHistoryList(updated);
-                      }}
-                      className="w-5 h-5 border border-slate-300 bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded flex items-center justify-center font-bold text-xs flex-shrink-0"
-                      title="Clear"
-                    >
-                      x
-                    </button>
-                    <div className="flex-1 relative">
-                      <input
-                        type="text"
-                        value={dh}
-                        onFocus={() => {
-                          setActiveDrugHistoryIndex(i);
-                          setDrugHistoryQuery(dh);
-                        }}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const updated = [...drugHistoryList];
-                          updated[i] = val;
-                          setDrugHistoryList(updated);
-                          setActiveDrugHistoryIndex(i);
-                          setDrugHistoryQuery(val);
-                        }}
-                        onBlur={() => {
-                          setTimeout(() => {
-                            setActiveDrugHistoryIndex((prev) => (prev === i ? null : prev));
-                          }, 250);
-                        }}
-                        placeholder="e.g. Tab. Metformin 500mg, Tab. Losartan 50mg..."
-                        className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-white focus:outline-none focus:border-blue-500 font-semibold text-blue-950"
-                      />
+                {drugHistoryList.map((dh, i) => {
+                  const isFocused = activeDrugHistoryIndex === i;
+                  const q = (drugHistoryQuery ?? dh ?? '').trim().toLowerCase();
 
-                      {/* Live Drug Database Autocomplete Suggestion */}
-                      {activeDrugHistoryIndex === i && drugHistoryQuery.trim().length > 1 && (
-                        <div className="absolute z-[999] left-0 top-full mt-1 w-full min-w-[280px] bg-white border-2 border-blue-500 rounded-md shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-100">
-                          <div className="bg-blue-600 text-white px-2 py-0.5 text-[10px] font-bold flex justify-between items-center sticky top-0 z-10">
-                            <span>💊 Medicine Suggestions ({allDrugs.filter((d) => d.name.toLowerCase().includes(drugHistoryQuery.toLowerCase()) || d.generic.toLowerCase().includes(drugHistoryQuery.toLowerCase())).length})</span>
-                            <span className="text-blue-100 text-[9px]">From /drugs Database</span>
-                          </div>
-                          {allDrugs
-                            .filter(
-                              (d) =>
-                                d.name.toLowerCase().includes(drugHistoryQuery.toLowerCase()) ||
-                                d.generic.toLowerCase().includes(drugHistoryQuery.toLowerCase())
-                            )
-                            .slice(0, 10)
-                            .map((drug) => (
-                              <div
-                                key={drug.id}
-                                onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  const updated = [...drugHistoryList];
-                                  updated[i] = drug.prescriptionName || `${drug.form} ${drug.name} ${drug.strength}`;
-                                  setDrugHistoryList(updated);
-                                  setActiveDrugHistoryIndex(null);
-                                }}
-                                className="p-1.5 hover:bg-sky-100 cursor-pointer text-xs transition"
-                              >
-                                <div className="font-bold text-blue-900 text-[11px]">
-                                  {drug.prescriptionName || `${drug.form} ${drug.name} ${drug.strength}`}
+                  const matchedHistoryTemplates = isFocused
+                    ? allTemplates
+                        .filter((t) => t.type === 'drughistory_auto' || t.type === 'drughistory')
+                        .filter((t) => {
+                          if (!q) return true;
+                          return (
+                            t.name.toLowerCase().includes(q) ||
+                            (t.content && t.content.toLowerCase().includes(q))
+                          );
+                        })
+                        .sort((a, b) => (b.count || 0) - (a.count || 0))
+                    : [];
+
+                  const matchedDrugs = isFocused && q.length > 0
+                    ? allDrugs
+                        .filter(
+                          (d) =>
+                            d.name.toLowerCase().includes(q) ||
+                            d.generic.toLowerCase().includes(q) ||
+                            (d.prescriptionName && d.prescriptionName.toLowerCase().includes(q))
+                        )
+                        .slice(0, 10)
+                    : [];
+
+                  const totalMatches = matchedHistoryTemplates.length + matchedDrugs.length;
+
+                  return (
+                    <div key={i} className="flex items-center gap-1 relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (drugHistoryList.length > 1) {
+                            setDrugHistoryList(drugHistoryList.filter((_, idx) => idx !== i));
+                          } else {
+                            setDrugHistoryList(['']);
+                          }
+                        }}
+                        className="w-5 h-5 border border-slate-300 bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded flex items-center justify-center font-bold text-xs flex-shrink-0"
+                        title="Clear / Delete"
+                      >
+                        x
+                      </button>
+                      <div className="flex-1 relative">
+                        <input
+                          type="text"
+                          value={dh}
+                          onFocus={() => {
+                            setActiveDrugHistoryIndex(i);
+                            setDrugHistoryQuery(dh);
+                          }}
+                          onClick={() => {
+                            setActiveDrugHistoryIndex(i);
+                            setDrugHistoryQuery(dh);
+                          }}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const updated = [...drugHistoryList];
+                            updated[i] = val;
+                            setDrugHistoryList(updated);
+                            setActiveDrugHistoryIndex(i);
+                            setDrugHistoryQuery(val);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (dh.trim().length >= 2) {
+                                autoSaveSingleDrugHistory(dh.trim());
+                              }
+                              setActiveDrugHistoryIndex(null);
+                            }
+                          }}
+                          onBlur={() => {
+                            if (dh.trim().length >= 2) {
+                              autoSaveSingleDrugHistory(dh.trim());
+                            }
+                            setTimeout(() => {
+                              setActiveDrugHistoryIndex((prev) => (prev === i ? null : prev));
+                            }, 250);
+                          }}
+                          placeholder="e.g. Tab. Metformin 500mg, Tab. Losartan 50mg..."
+                          className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-white focus:outline-none focus:border-blue-500 font-semibold text-blue-950"
+                        />
+
+                        {/* Live Drug History & Database Autocomplete Suggestion Dropdown */}
+                        {isFocused && (
+                          <div className="absolute z-[999] left-0 top-full mt-1 w-full min-w-[320px] bg-white border-2 border-blue-500 rounded-md shadow-2xl max-h-64 overflow-y-auto divide-y divide-slate-100">
+                            <div className="bg-blue-600 text-white px-2.5 py-1 text-[11px] font-bold flex justify-between items-center sticky top-0 z-10">
+                              <span>💡 Drug History Suggestions ({totalMatches})</span>
+                              <span className="text-blue-100 text-[9px]">Click to insert</span>
+                            </div>
+
+                            {/* Instant Custom Auto-save Option if user typed new drug history text */}
+                            {q.length >= 2 &&
+                              !matchedHistoryTemplates.some(
+                                (t) =>
+                                  t.name.toLowerCase().trim() === q ||
+                                  (t.content && t.content.toLowerCase().trim() === q)
+                              ) && (
+                                <div
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    const updated = [...drugHistoryList];
+                                    updated[i] = dh.trim();
+                                    setDrugHistoryList(updated);
+                                    setActiveDrugHistoryIndex(null);
+                                    autoSaveSingleDrugHistory(dh.trim());
+                                  }}
+                                  className="p-2 bg-amber-50 hover:bg-amber-100 border-b border-amber-200 cursor-pointer text-xs flex items-center justify-between transition"
+                                >
+                                  <div className="flex items-center space-x-1.5 text-amber-900 font-semibold">
+                                    <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                    <span>নতুন ড্রাগ হিস্ট্রি হিসেবে অটো-সেভ করুন: <strong>{dh}</strong></span>
+                                  </div>
+                                  <span className="text-[10px] bg-amber-600 text-white px-1.5 py-0.5 rounded font-bold shrink-0">
+                                    + Auto-save
+                                  </span>
                                 </div>
-                                <div className="text-[10px] text-slate-500 flex justify-between mt-0.5">
-                                  <span>Generic: {drug.generic}</span>
-                                  <span className="text-slate-400">{drug.company}</span>
+                              )}
+
+                            {/* Saved Drug History Templates */}
+                            {matchedHistoryTemplates.slice(0, 10).map((tmpl) => {
+                              const textVal = tmpl.name;
+                              return (
+                                <div
+                                  key={tmpl.id}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    const updated = [...drugHistoryList];
+                                    updated[i] = textVal;
+                                    setDrugHistoryList(updated);
+                                    setActiveDrugHistoryIndex(null);
+                                    autoSaveSingleDrugHistory(textVal);
+                                  }}
+                                  className="p-2 hover:bg-sky-100 cursor-pointer text-xs flex justify-between items-center text-slate-800 transition"
+                                >
+                                  <span className="font-semibold text-blue-950">{textVal}</span>
+                                  {tmpl.count && tmpl.count > 0 ? (
+                                    <span className="text-[10px] bg-sky-50 text-blue-700 px-1.5 py-0.5 rounded font-mono font-bold shrink-0 ml-2">
+                                      {tmpl.count}x
+                                    </span>
+                                  ) : null}
                                 </div>
+                              );
+                            })}
+
+                            {/* Matched Drugs from Drugs Database */}
+                            {matchedDrugs.length > 0 && (
+                              <>
+                                <div className="bg-slate-100 text-slate-600 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider sticky top-0">
+                                  💊 ঔষধ ডাটাবেস ({matchedDrugs.length})
+                                </div>
+                                {matchedDrugs.map((drug) => {
+                                  const brandVal = drug.prescriptionName || `${drug.form} ${drug.name} ${drug.strength}`;
+                                  return (
+                                    <div
+                                      key={drug.id}
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        const updated = [...drugHistoryList];
+                                        updated[i] = brandVal;
+                                        setDrugHistoryList(updated);
+                                        setActiveDrugHistoryIndex(null);
+                                        autoSaveSingleDrugHistory(brandVal);
+                                      }}
+                                      className="p-1.5 hover:bg-sky-100 cursor-pointer text-xs transition"
+                                    >
+                                      <div className="font-bold text-blue-900 text-[11px]">{brandVal}</div>
+                                      <div className="text-[10px] text-slate-500 flex justify-between mt-0.5">
+                                        <span>Generic: {drug.generic}</span>
+                                        <span className="text-slate-400">{drug.company}</span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </>
+                            )}
+
+                            {totalMatches === 0 && (
+                              <div className="p-3 text-center text-slate-400 text-xs">
+                                কোনো ড্রাগ হিস্ট্রি পাওয়া যায়নি। নাম লিখলে স্বয়ংক্রিয়ভাবে সেভ হয়ে যাবে।
                               </div>
-                            ))}
-                        </div>
-                      )}
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {openDropdownSection === 'drughistory' && (
-                <div className="border-t border-blue-200 bg-sky-50 p-2 max-h-48 overflow-y-auto divide-y divide-sky-100">
-                  <div className="text-[10px] font-bold text-sky-800 uppercase mb-1">Drug History Presets</div>
+                <div className="border-t border-blue-200 bg-sky-50 p-2 max-h-56 overflow-y-auto divide-y divide-sky-100">
+                  <div className="text-[10px] font-bold text-sky-800 uppercase mb-1">Drug History Presets & Autosaves</div>
+                  {allTemplates
+                    .filter((t) => t.type === 'drughistory_auto' || t.type === 'drughistory')
+                    .sort((a, b) => (b.count || 0) - (a.count || 0))
+                    .slice(0, 10)
+                    .map((t, idx) => (
+                      <div
+                        key={t.id || idx}
+                        onClick={() => {
+                          const emptyIndex = drugHistoryList.findIndex((d) => !d.trim());
+                          if (emptyIndex !== -1) {
+                            const updated = [...drugHistoryList];
+                            updated[emptyIndex] = t.name;
+                            setDrugHistoryList(updated);
+                          } else {
+                            setDrugHistoryList([...drugHistoryList, t.name]);
+                          }
+                          autoSaveSingleDrugHistory(t.name);
+                          setOpenDropdownSection(null);
+                        }}
+                        className="py-1 px-1.5 hover:bg-white rounded cursor-pointer text-xs flex justify-between items-center"
+                      >
+                        <span className="font-semibold text-slate-800">{t.name}</span>
+                        <span className="text-blue-600 font-bold text-[10px]">+ Insert</span>
+                      </div>
+                    ))}
                   {['Antihypertensive drugs', 'Oral Hypoglycemic Agents (OHA)', 'Anticoagulant / Antiplatelet (Aspirin/Clopidogrel)', 'Steroid therapy', 'Bisphosphonates', 'Anti-epileptic drugs'].map((preset, idx) => (
                     <div
-                      key={idx}
+                      key={`preset_${idx}`}
                       onClick={() => {
                         const emptyIndex = drugHistoryList.findIndex((d) => !d.trim());
                         if (emptyIndex !== -1) {
@@ -1315,9 +2163,10 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                         } else {
                           setDrugHistoryList([...drugHistoryList, preset]);
                         }
+                        autoSaveSingleDrugHistory(preset);
                         setOpenDropdownSection(null);
                       }}
-                      className="py-1 px-1.5 hover:bg-white rounded cursor-pointer text-xs flex justify-between items-center"
+                      className="py-1 px-1.5 hover:bg-white rounded cursor-pointer text-xs flex justify-between items-center text-slate-600"
                     >
                       <span>{preset}</span>
                       <span className="text-blue-600 font-bold text-[10px]">+ Insert</span>
@@ -1388,19 +2237,6 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                     className="px-3 py-1 bg-white text-slate-800 rounded-full text-xs font-medium cursor-pointer shadow-inner w-36 text-center"
                   />
                 </div>
-
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="🔍 Treatment Template"
-                    onClick={() => {
-                      setTemplateModalType('treatment');
-                      setShowTemplateModal(true);
-                    }}
-                    readOnly
-                    className="px-3 py-1 bg-white text-slate-800 rounded-full text-xs font-medium cursor-pointer shadow-inner w-44 text-center"
-                  />
-                </div>
               </div>
             </div>
 
@@ -1443,9 +2279,12 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                           }}
                           onFocus={() => {
                             setActiveDrugIndex(index);
-                            setDrugSearchQuery(med.brand);
+                            setDrugSearchQuery(med.brand || '');
                           }}
                           onBlur={() => {
+                            if (med.brand.trim().length >= 2) {
+                              autoSaveSingleMedicine(med);
+                            }
                             setTimeout(() => {
                               setActiveDrugIndex((prev) => (prev === index ? null : prev));
                             }, 250);
@@ -1454,144 +2293,183 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                           className="w-full px-2 py-1 border border-slate-300 rounded font-semibold text-blue-900 focus:outline-none focus:border-blue-500 bg-white"
                         />
 
-                        {/* Instant Drug DB & Template Search Dropdown */}
-                        {activeDrugIndex === index && drugSearchQuery.trim().length > 0 && (
-                          <div className="absolute z-[999] left-0 top-full mt-1 w-96 bg-white border-2 border-blue-500 rounded-lg shadow-2xl max-h-64 overflow-y-auto divide-y divide-slate-100">
-                            <div className="bg-blue-600 text-white px-3 py-1 text-[11px] font-bold flex justify-between items-center sticky top-0 z-10">
-                              <span>💊 Medicines ({allDrugs.filter((d) => d.name.toLowerCase().includes(drugSearchQuery.toLowerCase()) || d.generic.toLowerCase().includes(drugSearchQuery.toLowerCase())).length})</span>
-                              <span className="text-blue-100 text-[9px]">Auto-fills Dose, Instruction & Duration</span>
-                            </div>
-                            {(() => {
-                              const q = drugSearchQuery.toLowerCase().trim();
-                              // 1. Matched templates (drug_auto & drug)
-                              const matchedTemplates = allTemplates.filter(
-                                (t) =>
-                                  (t.type === 'drug_auto' || t.type === 'drug') &&
-                                  t.name.toLowerCase().includes(q)
+                        {/* C/C-Style Live Autocomplete & Autosaved Suggestions Dropdown */}
+                        {activeDrugIndex === index && (() => {
+                          const q = (drugSearchQuery ?? med.brand ?? '').trim().toLowerCase();
+
+                          // 1. Matched templates (drug_auto & drug) sorted by frequency count (descending)
+                          const matchedTemplates = allTemplates
+                            .filter((t) => t.type === 'drug_auto' || t.type === 'drug')
+                            .filter((t) => {
+                              if (!q) return true;
+                              return (
+                                t.name.toLowerCase().includes(q) ||
+                                (t.content && t.content.toLowerCase().includes(q))
                               );
+                            })
+                            .sort((a, b) => (b.count || 0) - (a.count || 0));
 
-                              // 2. Matched drugs from allDrugs
-                              const matchedDrugs = allDrugs.filter(
-                                (d) =>
-                                  d.name.toLowerCase().includes(q) ||
-                                  d.generic.toLowerCase().includes(q) ||
-                                  (d.prescriptionName && d.prescriptionName.toLowerCase().includes(q))
-                              );
+                          // 2. Matched drugs from allDrugs (when user types)
+                          const matchedDrugs = q.length > 0
+                            ? allDrugs
+                                .filter(
+                                  (d) =>
+                                    d.name.toLowerCase().includes(q) ||
+                                    d.generic.toLowerCase().includes(q) ||
+                                    (d.prescriptionName && d.prescriptionName.toLowerCase().includes(q))
+                                )
+                                .slice(0, 10)
+                            : [];
 
-                              // Combine items
-                              const combinedList = [
-                                ...matchedTemplates.map((t) => {
-                                  let parsedDose = '১+০+১';
-                                  let parsedInst = 'খাবারের পর';
-                                  let parsedDur = '০৫ দিন';
-                                  if (t.content) {
-                                    try {
-                                      const p = JSON.parse(t.content);
-                                      if (p.dose) parsedDose = p.dose;
-                                      if (p.instruction) parsedInst = p.instruction;
-                                      if (p.duration) parsedDur = p.duration;
-                                    } catch (e) {
-                                      const parts = t.content.split(',');
-                                      if (parts[0]) parsedDose = parts[0].trim();
-                                      if (parts[1]) parsedInst = parts[1].trim();
-                                      if (parts[2]) parsedDur = parts[2].trim();
-                                    }
-                                  }
-                                  return {
-                                    id: t.id,
-                                    name: t.name,
-                                    prescriptionName: t.name,
-                                    generic: 'Remembered Prescription',
-                                    company: 'Auto-saved Template',
-                                    dose: parsedDose,
-                                    instruction: parsedInst,
-                                    duration: parsedDur,
-                                    isTemplate: true,
-                                  };
-                                }),
-                                ...matchedDrugs.map((d) => {
-                                  const t = allTemplates.find(
-                                    (tmpl) =>
-                                      (tmpl.type === 'drug_auto' || tmpl.type === 'drug') &&
-                                      tmpl.name.toLowerCase().trim() ===
-                                        (d.prescriptionName || `${d.form} ${d.name} ${d.strength}`).toLowerCase().trim()
-                                  );
-                                  let parsedDose = '১+০+১';
-                                  let parsedInst = 'খাবারের পর';
-                                  let parsedDur = '০৫ দিন';
-                                  if (t?.content) {
-                                    try {
-                                      const p = JSON.parse(t.content);
-                                      if (p.dose) parsedDose = p.dose;
-                                      if (p.instruction) parsedInst = p.instruction;
-                                      if (p.duration) parsedDur = p.duration;
-                                    } catch (e) {}
-                                  }
-                                  return {
-                                    ...d,
-                                    dose: parsedDose,
-                                    instruction: parsedInst,
-                                    duration: parsedDur,
-                                    isTemplate: !!t,
-                                  };
-                                }),
-                              ];
+                          const totalCount = matchedTemplates.length + (q.length > 0 ? matchedDrugs.length : 0);
 
-                              // Deduplicate by prescriptionName / name
-                              const seen = new Set<string>();
-                              const uniqueList = combinedList
-                                .filter((item) => {
-                                  const key = (item.prescriptionName || item.name).toLowerCase().trim();
-                                  if (seen.has(key)) return false;
-                                  seen.add(key);
-                                  return true;
-                                })
-                                .slice(0, 12);
+                          return (
+                            <div className="absolute z-[999] left-0 top-full mt-1 w-96 bg-white border-2 border-blue-500 rounded-lg shadow-2xl max-h-64 overflow-y-auto divide-y divide-slate-100">
+                              <div className="bg-blue-600 text-white px-2.5 py-1 text-[11px] font-bold flex justify-between items-center sticky top-0 z-10">
+                                <span>💡 Rx Autosave Suggestions ({totalCount})</span>
+                                <span className="text-blue-100 text-[9px]">Click to insert</span>
+                              </div>
 
-                              if (uniqueList.length === 0) {
-                                return (
-                                  <div className="p-3 text-center text-slate-400 text-xs">
-                                    No medicines found matching &quot;{drugSearchQuery}&quot;
-                                  </div>
-                                );
-                              }
-
-                              return uniqueList.map((drug) => (
+                              {/* Instant Custom Auto-save Option if user typed a new brand name */}
+                              {q.length >= 2 && !matchedTemplates.some((t) => t.name.toLowerCase().trim() === q) && (
                                 <div
-                                  key={drug.id}
                                   onMouseDown={(e) => {
                                     e.preventDefault();
-                                    handleSelectDrug(index, drug);
+                                    const updated = [...medicines];
+                                    const newMed = {
+                                      ...updated[index],
+                                      brand: med.brand.trim(),
+                                      dose: updated[index].dose || '১+০+১',
+                                      instruction: updated[index].instruction || 'খাবারের পর',
+                                      duration: updated[index].duration || '০৫ দিন',
+                                    };
+                                    updated[index] = newMed;
+                                    setMedicines(updated);
+                                    setActiveDrugIndex(null);
+                                    autoSaveSingleMedicine(newMed);
                                   }}
-                                  className="p-2 hover:bg-sky-50 cursor-pointer border-b border-slate-100 text-xs transition"
+                                  className="p-2 bg-amber-50 hover:bg-amber-100 border-b border-amber-200 cursor-pointer text-xs flex items-center justify-between transition"
                                 >
-                                  <div className="flex items-center justify-between">
-                                    <span className="font-bold text-blue-900">
-                                      {drug.prescriptionName || drug.name}
-                                    </span>
-                                    {drug.isTemplate && (
-                                      <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded shrink-0">
-                                        ⭐ Template
-                                      </span>
-                                    )}
+                                  <div className="flex items-center space-x-1.5 text-amber-900 font-semibold">
+                                    <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                    <span>নতুন ওষুধ হিসেবে অটো-সেভ করুন: <strong>{med.brand}</strong></span>
                                   </div>
-                                  <div className="text-[10px] text-slate-500 flex justify-between mt-0.5">
-                                    <span>{drug.generic}</span>
-                                    <span className="text-slate-400">{drug.company}</span>
-                                  </div>
-                                  <div className="mt-1 flex items-center space-x-1.5 text-[10px] bg-slate-100/90 text-blue-800 font-semibold px-1.5 py-0.5 rounded">
-                                    <span>💡 Auto-fill:</span>
-                                    <span className="font-mono text-emerald-700">{drug.dose}</span>
-                                    <span>•</span>
-                                    <span>{drug.instruction}</span>
-                                    <span>•</span>
-                                    <span className="text-purple-700">{drug.duration}</span>
-                                  </div>
+                                  <span className="text-[10px] bg-amber-600 text-white px-1.5 py-0.5 rounded font-bold shrink-0">
+                                    + Auto-save
+                                  </span>
                                 </div>
-                              ));
-                            })()}
-                          </div>
-                        )}
+                              )}
+
+                              {/* Autosaved Templates (C/C Style with Frequency Badges) */}
+                              {matchedTemplates.slice(0, 10).map((tmpl) => {
+                                let parsedDose = '১+০+১';
+                                let parsedInst = 'খাবারের পর';
+                                let parsedDur = '০৫ দিন';
+                                if (tmpl.content) {
+                                  try {
+                                    const p = JSON.parse(tmpl.content);
+                                    if (p.dose) parsedDose = p.dose;
+                                    if (p.instruction) parsedInst = p.instruction;
+                                    if (p.duration) parsedDur = p.duration;
+                                  } catch (e) {
+                                    const parts = tmpl.content.split(',');
+                                    if (parts[0]) parsedDose = parts[0].trim();
+                                    if (parts[1]) parsedInst = parts[1].trim();
+                                    if (parts[2]) parsedDur = parts[2].trim();
+                                  }
+                                }
+                                return (
+                                  <div
+                                    key={tmpl.id}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      const updated = [...medicines];
+                                      const newMed = {
+                                        ...updated[index],
+                                        brand: tmpl.name,
+                                        dose: parsedDose,
+                                        instruction: parsedInst,
+                                        duration: parsedDur,
+                                      };
+                                      updated[index] = newMed;
+                                      setMedicines(updated);
+                                      setActiveDrugIndex(null);
+                                      autoSaveSingleMedicine(newMed);
+                                    }}
+                                    className="p-2 hover:bg-sky-100 cursor-pointer text-xs flex justify-between items-center text-slate-800 transition"
+                                  >
+                                    <div>
+                                      <div className="font-semibold text-blue-950 flex items-center space-x-1.5">
+                                        <span>{tmpl.name}</span>
+                                        <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">
+                                          ⭐ Autosaved
+                                        </span>
+                                      </div>
+                                      <div className="text-[10px] text-slate-500 mt-0.5 flex items-center space-x-2">
+                                        <span className="font-mono text-emerald-700 font-semibold">{parsedDose}</span>
+                                        <span>•</span>
+                                        <span>{parsedInst}</span>
+                                        <span>•</span>
+                                        <span className="text-purple-700">{parsedDur}</span>
+                                      </div>
+                                    </div>
+                                    {tmpl.count && tmpl.count > 0 ? (
+                                      <span className="text-[10px] bg-sky-50 text-blue-700 px-1.5 py-0.5 rounded font-mono font-bold shrink-0 ml-2">
+                                        {tmpl.count}x
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+
+                              {/* More matches from Drug Database */}
+                              {matchedDrugs.length > 0 && (
+                                <div className="bg-slate-100 px-2.5 py-0.5 text-[10px] font-bold text-slate-600 uppercase sticky top-7 z-10 border-y border-slate-200">
+                                  💊 Drug Database Matches
+                                </div>
+                              )}
+                              {matchedDrugs
+                                .filter(
+                                  (d) =>
+                                    !matchedTemplates.some(
+                                      (t) =>
+                                        t.name.toLowerCase().trim() ===
+                                        (d.prescriptionName || d.name).toLowerCase().trim()
+                                    )
+                                )
+                                .slice(0, 8)
+                                .map((drug) => {
+                                  const brandName =
+                                    drug.prescriptionName || `${drug.form} ${drug.name} ${drug.strength}`;
+                                  return (
+                                    <div
+                                      key={drug.id}
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        handleSelectDrug(index, drug);
+                                      }}
+                                      className="p-2 hover:bg-sky-50 cursor-pointer border-b border-slate-100 text-xs transition"
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <span className="font-bold text-blue-900">{brandName}</span>
+                                        <span className="text-[10px] text-slate-400">{drug.company}</span>
+                                      </div>
+                                      <div className="text-[10px] text-slate-500 flex justify-between mt-0.5">
+                                        <span>Generic: {drug.generic}</span>
+                                        <span className="text-blue-600 font-semibold text-[9px]">+ Click to Auto-save</span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+
+                              {totalCount === 0 && (
+                                <div className="p-3 text-center text-slate-400 text-xs">
+                                  কোনো সংরক্ষিত বা ড্রাগ ডাটাবেজ পাওয়া যায়নি। টাইপ করে লিখলে স্বয়ংক্রিয়ভাবে সেভ হয়ে যাবে।
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="p-1">
                         <input
@@ -1600,6 +2478,11 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                           onChange={(e) =>
                             handleMedicineChange(index, 'dose', convertEnglishToBanglaDigits(e.target.value))
                           }
+                          onBlur={() => {
+                            if (med.brand.trim().length >= 2) {
+                              autoSaveSingleMedicine(med);
+                            }
+                          }}
                           placeholder="১+০+১"
                           className="w-full px-2 py-1 border border-slate-300 rounded font-medium text-slate-700 bg-white"
                         />
@@ -1611,6 +2494,11 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                           onChange={(e) =>
                             handleMedicineChange(index, 'instruction', convertPhoneticToBangla(e.target.value))
                           }
+                          onBlur={() => {
+                            if (med.brand.trim().length >= 2) {
+                              autoSaveSingleMedicine(med);
+                            }
+                          }}
                           placeholder="খাবারের পর"
                           className="w-full px-2 py-1 border border-slate-300 rounded bg-white"
                         />
@@ -1622,6 +2510,11 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                           onChange={(e) =>
                             handleMedicineChange(index, 'duration', convertPhoneticToBangla(e.target.value))
                           }
+                          onBlur={() => {
+                            if (med.brand.trim().length >= 2) {
+                              autoSaveSingleMedicine(med);
+                            }
+                          }}
                           placeholder="০৫ দিন"
                           className="w-full px-2 py-1 border border-slate-300 rounded bg-white"
                         />
@@ -1682,59 +2575,231 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
               <div className="bg-white rounded border border-blue-300 p-2 shadow-sm">
                 <div className="flex items-center justify-between mb-1.5 pb-1 border-b border-slate-200">
                   <span className="font-bold text-slate-800 text-xs">উপদেশঃ</span>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      placeholder="🔍 Advice Template"
-                      onClick={() => {
-                        setTemplateModalType('advice');
-                        setShowTemplateModal(true);
-                      }}
-                      readOnly
-                      className="px-3 py-0.5 bg-white border border-slate-300 text-slate-800 rounded-full text-xs font-medium cursor-pointer shadow-inner w-36 text-center"
-                    />
+                  <div className="flex items-center space-x-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setAdviceList([...adviceList, ''])}
+                      className="px-2 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded text-[11px] font-semibold flex items-center space-x-1 transition"
+                      title="Add Line"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>যোগ করুন</span>
+                    </button>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="🔍 Advice Template"
+                        onClick={() => {
+                          setTemplateModalType('advice');
+                          setShowTemplateModal(true);
+                        }}
+                        readOnly
+                        className="px-3 py-0.5 bg-white border border-slate-300 text-slate-800 rounded-full text-xs font-medium cursor-pointer shadow-inner w-36 text-center"
+                      />
+                    </div>
                   </div>
                 </div>
                 <div className="space-y-1">
-                  {adviceList.map((adv, idx) => (
-                    <div key={idx} className="flex items-center space-x-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const updated = [...adviceList];
-                          updated[idx] = '';
-                          setAdviceList(updated);
-                        }}
-                        className="w-5 h-5 border border-slate-300 bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded flex items-center justify-center font-bold text-xs"
-                      >
-                        x
-                      </button>
-                      <input
-                        type="text"
-                        value={adv}
-                        onChange={(e) => {
-                          const updated = [...adviceList];
-                          updated[idx] = convertPhoneticToBangla(e.target.value);
-                          setAdviceList(updated);
-                        }}
-                        placeholder="নরম ও ঠান্ডা খাবার খাবেন..."
-                        className="w-full px-2 py-0.5 border border-slate-300 rounded text-xs bg-white focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                  ))}
+                  {adviceList.map((adv, idx) => {
+                    const isFocused =
+                      activeClinicalSuggest?.sectionKey === 'advice' &&
+                      activeClinicalSuggest?.index === idx;
+
+                    const q = (activeClinicalSuggest?.query ?? adv ?? '').trim().toLowerCase();
+
+                    const matchedAdviceTemplates = isFocused
+                      ? allTemplates
+                          .filter((t) => t.type === 'advice_auto' || t.type === 'advice')
+                          .filter((t) => {
+                            if (!q) return true;
+                            return (
+                              t.name.toLowerCase().includes(q) ||
+                              (t.content && t.content.toLowerCase().includes(q))
+                            );
+                          })
+                          .sort((a, b) => (b.count || 0) - (a.count || 0))
+                      : [];
+
+                    return (
+                      <div key={idx} className="flex items-center space-x-1 relative">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = [...adviceList];
+                            if (adviceList.length > 1) {
+                              updated.splice(idx, 1);
+                            } else {
+                              updated[0] = '';
+                            }
+                            setAdviceList(updated);
+                          }}
+                          className="w-5 h-5 border border-slate-300 bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded flex items-center justify-center font-bold text-xs shrink-0"
+                          title="Clear / Delete"
+                        >
+                          x
+                        </button>
+                        <div className="flex-1 relative">
+                          <input
+                            type="text"
+                            value={adv}
+                            onFocus={() => {
+                              setActiveClinicalSuggest({
+                                sectionKey: 'advice',
+                                index: idx,
+                                query: adv,
+                              });
+                            }}
+                            onChange={(e) => {
+                              const converted = convertPhoneticToBangla(e.target.value);
+                              const updated = [...adviceList];
+                              updated[idx] = converted;
+                              setAdviceList(updated);
+                              setActiveClinicalSuggest({
+                                sectionKey: 'advice',
+                                index: idx,
+                                query: converted,
+                              });
+                            }}
+                            onBlur={() => {
+                              if (adv.trim().length >= 2) {
+                                autoSaveSingleAdvice(adv);
+                              }
+                              setTimeout(() => {
+                                setActiveClinicalSuggest((prev) =>
+                                  prev?.sectionKey === 'advice' && prev?.index === idx ? null : prev
+                                );
+                              }, 250);
+                            }}
+                            placeholder="নরম ও ঠান্ডা খাবার খাবেন..."
+                            className="w-full px-2 py-0.5 border border-slate-300 rounded text-xs bg-white focus:outline-none focus:border-blue-500 font-medium"
+                          />
+
+                          {/* C/C-Style Live Autocomplete & Autosaved Suggestions Dropdown */}
+                          {isFocused && (
+                            <div className="absolute left-0 top-full mt-1 w-full min-w-[300px] bg-white border-2 border-blue-500 rounded-md shadow-2xl z-[999] max-h-56 overflow-y-auto divide-y divide-slate-100">
+                              <div className="bg-blue-600 text-white px-2.5 py-1 text-[11px] font-bold flex justify-between items-center sticky top-0 z-10">
+                                <span>💡 উপদেশ Autosave Suggestions ({matchedAdviceTemplates.length})</span>
+                                <span className="text-blue-100 text-[9px]">Click to insert</span>
+                              </div>
+
+                              {/* Instant Custom Auto-save Option if user typed new advice text */}
+                              {q.length >= 2 &&
+                                !matchedAdviceTemplates.some(
+                                  (t) =>
+                                    t.name.toLowerCase().trim() === q ||
+                                    (t.content && t.content.toLowerCase().trim() === q)
+                                ) && (
+                                  <div
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      const updated = [...adviceList];
+                                      updated[idx] = adv.trim();
+                                      setAdviceList(updated);
+                                      setActiveClinicalSuggest(null);
+                                      autoSaveSingleAdvice(adv.trim());
+                                    }}
+                                    className="p-2 bg-amber-50 hover:bg-amber-100 border-b border-amber-200 cursor-pointer text-xs flex items-center justify-between transition"
+                                  >
+                                    <div className="flex items-center space-x-1.5 text-amber-900 font-semibold">
+                                      <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                      <span>নতুন উপদেশ হিসেবে অটো-সেভ করুন: <strong>{adv}</strong></span>
+                                    </div>
+                                    <span className="text-[10px] bg-amber-600 text-white px-1.5 py-0.5 rounded font-bold shrink-0">
+                                      + Auto-save
+                                    </span>
+                                  </div>
+                                )}
+
+                              {/* Saved Advice Templates */}
+                              {matchedAdviceTemplates.slice(0, 10).map((tmpl) => {
+                                const textVal = tmpl.content || tmpl.name;
+                                return (
+                                  <div
+                                    key={tmpl.id}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      const updated = [...adviceList];
+                                      updated[idx] = textVal;
+                                      setAdviceList(updated);
+                                      setActiveClinicalSuggest(null);
+                                      autoSaveSingleAdvice(textVal);
+                                    }}
+                                    className="p-2 hover:bg-sky-100 cursor-pointer text-xs flex justify-between items-center text-slate-800 transition"
+                                  >
+                                    <span className="font-semibold text-blue-950">{textVal}</span>
+                                    {tmpl.count && tmpl.count > 0 ? (
+                                      <span className="text-[10px] bg-sky-50 text-blue-700 px-1.5 py-0.5 rounded font-mono font-bold shrink-0 ml-2">
+                                        {tmpl.count}x
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+
+                              {matchedAdviceTemplates.length === 0 && (
+                                <div className="p-3 text-center text-slate-400 text-xs">
+                                  কোনো সংরক্ষিত উপদেশ পাওয়া যায়নি। টাইপ করে লিখলে স্বয়ংক্রিয়ভাবে সেভ হয়ে যাবে।
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
+
+                {/* Collapsible Drawer for Presets & Autosaves matching C/C style */}
+                {openDropdownSection === 'advice' && (
+                  <div className="border-t border-blue-200 bg-sky-50 p-2 max-h-48 overflow-y-auto divide-y divide-sky-100 mt-2 rounded">
+                    <div className="text-[10px] font-bold text-sky-800 uppercase mb-1">উপদেশ Presets & Autosaves</div>
+                    {allTemplates
+                      .filter((t) => t.type === 'advice_auto' || t.type === 'advice')
+                      .sort((a, b) => (b.count || 0) - (a.count || 0))
+                      .slice(0, 15)
+                      .map((t, i) => {
+                        const textVal = t.content || t.name;
+                        return (
+                          <div
+                            key={i}
+                            onClick={() => {
+                              const emptyIdx = adviceList.findIndex((x) => !x.trim());
+                              if (emptyIdx !== -1) {
+                                const updated = [...adviceList];
+                                updated[emptyIdx] = textVal;
+                                setAdviceList(updated);
+                              } else {
+                                setAdviceList([...adviceList.filter(Boolean), textVal]);
+                              }
+                              autoSaveSingleAdvice(textVal);
+                              setOpenDropdownSection(null);
+                            }}
+                            className="py-1 px-1.5 hover:bg-white rounded cursor-pointer text-xs flex justify-between items-center"
+                          >
+                            <span className="font-medium text-slate-800">{textVal}</span>
+                            <div className="flex items-center space-x-1.5 shrink-0 ml-2">
+                              {t.count && t.count > 0 && (
+                                <span className="text-[10px] bg-white border border-sky-200 text-blue-700 px-1.5 py-0.2 rounded font-mono font-bold">
+                                  {t.count}x
+                                </span>
+                              )}
+                              <span className="text-blue-600 font-bold text-[10px]">+ Insert</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
               </div>
+
               <div className="flex justify-center -mt-1 relative z-10">
                 <button
                   type="button"
-                  onClick={() => {
-                    setTemplateModalType('advice');
-                    setShowTemplateModal(true);
-                  }}
+                  onClick={() => setOpenDropdownSection(openDropdownSection === 'advice' ? null : 'advice')}
                   className="w-12 h-4 bg-[#0088cc] hover:bg-[#0077b5] text-white rounded-b-md flex items-center justify-center shadow transition cursor-pointer"
-                  title="Advice Presets"
+                  title="Quick Advice Presets"
                 >
-                  <ChevronDown className="w-3.5 h-3.5" />
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${openDropdownSection === 'advice' ? 'rotate-180' : ''}`} />
                 </button>
               </div>
             </div>
@@ -1819,7 +2884,7 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
             <div className="grid grid-cols-12 gap-3">
               {/* Left Contract Table */}
               <div className="col-span-12 md:col-span-7">
-                <div className="border border-slate-400 bg-white rounded overflow-hidden">
+                <div className="border border-slate-400 bg-white rounded relative">
                   <div className="grid grid-cols-12 bg-slate-100 border-b border-slate-300 text-center font-bold text-[11px] py-1 text-slate-700">
                     <div className="col-span-1">X</div>
                     <div className="col-span-5">Particularis</div>
@@ -1827,101 +2892,301 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                     <div className="col-span-3">Price/ TK.</div>
                   </div>
                   <div className="divide-y divide-slate-200 bg-[#f7f9fc]">
-                    {contractRows.map((row, idx) => (
-                      <div key={idx} className="grid grid-cols-12 items-center gap-1 p-1">
-                        <div className="col-span-1 text-center">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const updated = [...contractRows];
-                              updated[idx] = { particulars: '', quadrant: defaultQuadrant(), price: 0 };
-                              setContractRows(updated);
-                            }}
-                            className="w-5 h-5 border border-slate-300 bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded flex items-center justify-center font-bold text-xs"
-                          >
-                            x
-                          </button>
-                        </div>
-                        <div className="col-span-5">
-                          <input
-                            type="text"
-                            value={row.particulars}
-                            onChange={(e) => {
-                              const updated = [...contractRows];
-                              updated[idx] = { ...row, particulars: e.target.value };
-                              setContractRows(updated);
-                            }}
-                            placeholder="e.g. RCT + Zirconia Crown"
-                            className="w-full px-1.5 py-1 border border-slate-300 rounded text-xs bg-white"
-                          />
-                        </div>
-                        <div className="col-span-3">
-                          <div className="border border-slate-300 bg-white rounded flex flex-col justify-between h-8">
-                            <div className="flex border-b border-slate-300 flex-1">
-                              <input
-                                type="text"
-                                value={row.quadrant.ur}
-                                onChange={(e) => {
-                                  const updated = [...contractRows];
-                                  updated[idx] = { ...row, quadrant: { ...row.quadrant, ur: e.target.value } };
-                                  setContractRows(updated);
-                                }}
-                                className="w-1/2 text-center text-[9px] font-mono border-r border-slate-300"
-                                placeholder="UR"
-                              />
-                              <input
-                                type="text"
-                                value={row.quadrant.ul}
-                                onChange={(e) => {
-                                  const updated = [...contractRows];
-                                  updated[idx] = { ...row, quadrant: { ...row.quadrant, ul: e.target.value } };
-                                  setContractRows(updated);
-                                }}
-                                className="w-1/2 text-center text-[9px] font-mono"
-                                placeholder="UL"
-                              />
-                            </div>
-                            <div className="flex flex-1">
-                              <input
-                                type="text"
-                                value={row.quadrant.lr}
-                                onChange={(e) => {
-                                  const updated = [...contractRows];
-                                  updated[idx] = { ...row, quadrant: { ...row.quadrant, lr: e.target.value } };
-                                  setContractRows(updated);
-                                }}
-                                className="w-1/2 text-center text-[9px] font-mono border-r border-slate-300"
-                                placeholder="LR"
-                              />
-                              <input
-                                type="text"
-                                value={row.quadrant.ll}
-                                onChange={(e) => {
-                                  const updated = [...contractRows];
-                                  updated[idx] = { ...row, quadrant: { ...row.quadrant, ll: e.target.value } };
-                                  setContractRows(updated);
-                                }}
-                                className="w-1/2 text-center text-[9px] font-mono"
-                                placeholder="LL"
-                              />
+                    {contractRows.map((row, idx) => {
+                      const isFocused = activeContractIndex === idx;
+                      const q = (contractSearchQuery ?? row.particulars ?? '').trim().toLowerCase();
+
+                      const matchedCostTemplates = isFocused
+                        ? allTemplates
+                            .filter((t) => {
+                              const isCost =
+                                t.type === 'cost' ||
+                                t.type === 'cost_auto' ||
+                                t.type === 'treatment' ||
+                                t.type === 'treatment_auto';
+                              if (!isCost) return false;
+                              if (!q) return true;
+                              return (
+                                t.name.toLowerCase().includes(q) ||
+                                (t.content && t.content.toLowerCase().includes(q)) ||
+                                (t.price !== undefined && t.price.toString().includes(q))
+                              );
+                            })
+                            .sort((a, b) => {
+                              if ((b.count || 0) !== (a.count || 0)) {
+                                return (b.count || 0) - (a.count || 0);
+                              }
+                              return a.name.localeCompare(b.name);
+                            })
+                            .slice(0, 15)
+                        : [];
+
+                      return (
+                        <div
+                          key={idx}
+                          className={`grid grid-cols-12 items-center gap-1 p-1 ${
+                            isFocused ? 'relative z-30' : 'relative z-10'
+                          }`}
+                        >
+                          <div className="col-span-1 text-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = [...contractRows];
+                                updated[idx] = { particulars: '', quadrant: defaultQuadrant(), price: 0, unitPrice: 0 };
+                                setContractRows(updated);
+                              }}
+                              className="w-5 h-5 border border-slate-300 bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded flex items-center justify-center font-bold text-xs"
+                            >
+                              x
+                            </button>
+                          </div>
+                          <div className="col-span-5 relative">
+                            <input
+                              type="text"
+                              value={row.particulars}
+                              onFocus={() => {
+                                setActiveContractIndex(idx);
+                                setContractSearchQuery(row.particulars);
+                              }}
+                              onClick={() => {
+                                setActiveContractIndex(idx);
+                                setContractSearchQuery(row.particulars);
+                              }}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const updated = [...contractRows];
+                                updated[idx] = { ...row, particulars: val };
+                                setContractRows(updated);
+                                setContractSearchQuery(val);
+                                setActiveContractIndex(idx);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  if (row.particulars.trim().length >= 2) {
+                                    autoSaveContractProcedure(row.particulars, row.unitPrice || row.price);
+                                  }
+                                  setActiveContractIndex(null);
+                                }
+                              }}
+                              onBlur={() => {
+                                setTimeout(() => {
+                                  setActiveContractIndex((prev) => (prev === idx ? null : prev));
+                                }, 250);
+                                if (row.particulars.trim().length >= 2) {
+                                  autoSaveContractProcedure(row.particulars, row.unitPrice || row.price);
+                                }
+                              }}
+                              placeholder="e.g. RCT + Zirconia Crown"
+                              className="w-full px-1.5 py-1 border border-slate-300 rounded text-xs bg-white focus:outline-none focus:border-blue-500 font-medium"
+                            />
+
+                            {/* Live Cost Template Suggestions Dropdown */}
+                            {isFocused && (
+                              <div className="absolute left-0 top-full mt-1 w-full min-w-[320px] sm:min-w-[380px] bg-white border-2 border-blue-500 rounded-lg shadow-2xl z-[9999] max-h-64 overflow-y-auto divide-y divide-slate-100">
+                                <div className="bg-blue-600 text-white px-2.5 py-1 text-[11px] font-bold flex justify-between items-center sticky top-0 z-10">
+                                  <span>💡 ট্রিটমেন্ট কস্ট সাজেশন ({matchedCostTemplates.length})</span>
+                                  <span className="text-blue-100 text-[9px]">দাঁতের সংখ্যা অনুযায়ী গুণ হবে</span>
+                                </div>
+
+                                {/* Auto-save New Procedure Option if user typed custom name */}
+                                {q.length >= 2 && !matchedCostTemplates.some((t) => t.name.toLowerCase().trim() === q) && (
+                                  <div
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      const updated = [...contractRows];
+                                      const unitPrice = row.unitPrice || row.price;
+                                      updated[idx] = { ...row, particulars: row.particulars.trim(), unitPrice };
+                                      setContractRows(updated);
+                                      setActiveContractIndex(null);
+                                      autoSaveContractProcedure(row.particulars.trim(), unitPrice);
+                                    }}
+                                    className="p-2.5 bg-emerald-50 hover:bg-emerald-100 border-b border-emerald-200 cursor-pointer text-xs flex items-center justify-between transition group"
+                                  >
+                                    <div className="flex items-center space-x-1.5 text-emerald-900 font-semibold">
+                                      <Sparkles className="w-4 h-4 text-emerald-600 shrink-0 animate-pulse" />
+                                      <span>ট্রিটমেন্ট কস্ট টেমপ্লেটে নতুন সেভ করুন: <strong className="text-emerald-950 underline">{row.particulars}</strong></span>
+                                    </div>
+                                    <span className="text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-0.5 rounded-md font-bold shadow-xs">
+                                      + অটো-সেভ করুন
+                                    </span>
+                                  </div>
+                                )}
+
+                                {/* Suggestions List */}
+                                {matchedCostTemplates.map((tmpl) => (
+                                  <div
+                                    key={tmpl.id}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      const unitPrice = tmpl.price !== undefined && tmpl.price > 0 ? tmpl.price : 0;
+                                      const { price } = calculateContractRowPrice(row, row.quadrant, unitPrice);
+                                      const updated = [...contractRows];
+                                      updated[idx] = {
+                                        ...row,
+                                        particulars: tmpl.name,
+                                        unitPrice,
+                                        price,
+                                      };
+                                      setContractRows(updated);
+                                      setActiveContractIndex(null);
+                                      autoSaveContractProcedure(tmpl.name, unitPrice);
+                                    }}
+                                    className="p-2 hover:bg-sky-50 cursor-pointer text-xs flex justify-between items-center text-slate-800 transition"
+                                  >
+                                    <div className="flex items-center space-x-1.5">
+                                      <span className="font-semibold text-blue-950">{tmpl.name}</span>
+                                      {tmpl.count && tmpl.count > 0 ? (
+                                        <span className="text-[9px] bg-blue-50 text-blue-700 px-1.5 py-0.2 rounded font-mono font-bold">
+                                          {tmpl.count}x
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    {tmpl.price !== undefined && tmpl.price > 0 ? (
+                                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-mono shrink-0 ml-2">
+                                        ৳ {tmpl.price} / দাঁত
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400 italic">মূল্য নেই</span>
+                                    )}
+                                  </div>
+                                ))}
+
+                                {matchedCostTemplates.length === 0 && (
+                                  <div className="p-3 text-center text-slate-400 text-xs">
+                                    কোনো ট্রিটমেন্ট কস্ট টেমপ্লেট মেলেনি। টাইপ করে নতুন চিকিৎসা যোগ করতে পারেন।
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div className="col-span-3">
+                            <div className="border border-slate-300 bg-white rounded flex flex-col justify-between h-8">
+                              <div className="flex border-b border-slate-300 flex-1">
+                                <input
+                                  type="text"
+                                  value={row.quadrant.ur}
+                                  onChange={(e) => {
+                                    const newQuad = { ...row.quadrant, ur: e.target.value };
+                                    const { price, unitPrice } = calculateContractRowPrice(row, newQuad);
+                                    const updated = [...contractRows];
+                                    updated[idx] = { ...row, quadrant: newQuad, price, unitPrice };
+                                    setContractRows(updated);
+                                  }}
+                                  onClick={() =>
+                                    openToothPicker('contract', row.particulars || 'Treatment Contract', idx, 'ur', row.quadrant, (saved) => {
+                                      const { price, unitPrice } = calculateContractRowPrice(row, saved);
+                                      const updated = [...contractRows];
+                                      updated[idx] = { ...row, quadrant: saved, price, unitPrice };
+                                      setContractRows(updated);
+                                    })
+                                  }
+                                  title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (UR)"
+                                  className="w-1/2 text-center text-[9px] font-mono border-r border-slate-300 hover:bg-sky-100 hover:text-blue-900 cursor-pointer font-bold transition"
+                                  placeholder="UR"
+                                />
+                                <input
+                                  type="text"
+                                  value={row.quadrant.ul}
+                                  onChange={(e) => {
+                                    const newQuad = { ...row.quadrant, ul: e.target.value };
+                                    const { price, unitPrice } = calculateContractRowPrice(row, newQuad);
+                                    const updated = [...contractRows];
+                                    updated[idx] = { ...row, quadrant: newQuad, price, unitPrice };
+                                    setContractRows(updated);
+                                  }}
+                                  onClick={() =>
+                                    openToothPicker('contract', row.particulars || 'Treatment Contract', idx, 'ul', row.quadrant, (saved) => {
+                                      const { price, unitPrice } = calculateContractRowPrice(row, saved);
+                                      const updated = [...contractRows];
+                                      updated[idx] = { ...row, quadrant: saved, price, unitPrice };
+                                      setContractRows(updated);
+                                    })
+                                  }
+                                  title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (UL)"
+                                  className="w-1/2 text-center text-[9px] font-mono hover:bg-sky-100 hover:text-blue-900 cursor-pointer font-bold transition"
+                                  placeholder="UL"
+                                />
+                              </div>
+                              <div className="flex flex-1">
+                                <input
+                                  type="text"
+                                  value={row.quadrant.lr}
+                                  onChange={(e) => {
+                                    const newQuad = { ...row.quadrant, lr: e.target.value };
+                                    const { price, unitPrice } = calculateContractRowPrice(row, newQuad);
+                                    const updated = [...contractRows];
+                                    updated[idx] = { ...row, quadrant: newQuad, price, unitPrice };
+                                    setContractRows(updated);
+                                  }}
+                                  onClick={() =>
+                                    openToothPicker('contract', row.particulars || 'Treatment Contract', idx, 'lr', row.quadrant, (saved) => {
+                                      const { price, unitPrice } = calculateContractRowPrice(row, saved);
+                                      const updated = [...contractRows];
+                                      updated[idx] = { ...row, quadrant: saved, price, unitPrice };
+                                      setContractRows(updated);
+                                    })
+                                  }
+                                  title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (LR)"
+                                  className="w-1/2 text-center text-[9px] font-mono border-r border-slate-300 hover:bg-sky-100 hover:text-blue-900 cursor-pointer font-bold transition"
+                                  placeholder="LR"
+                                />
+                                <input
+                                  type="text"
+                                  value={row.quadrant.ll}
+                                  onChange={(e) => {
+                                    const newQuad = { ...row.quadrant, ll: e.target.value };
+                                    const { price, unitPrice } = calculateContractRowPrice(row, newQuad);
+                                    const updated = [...contractRows];
+                                    updated[idx] = { ...row, quadrant: newQuad, price, unitPrice };
+                                    setContractRows(updated);
+                                  }}
+                                  onClick={() =>
+                                    openToothPicker('contract', row.particulars || 'Treatment Contract', idx, 'll', row.quadrant, (saved) => {
+                                      const { price, unitPrice } = calculateContractRowPrice(row, saved);
+                                      const updated = [...contractRows];
+                                      updated[idx] = { ...row, quadrant: saved, price, unitPrice };
+                                      setContractRows(updated);
+                                    })
+                                  }
+                                  title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (LL)"
+                                  className="w-1/2 text-center text-[9px] font-mono hover:bg-sky-100 hover:text-blue-900 cursor-pointer font-bold transition"
+                                  placeholder="LL"
+                                />
+                              </div>
                             </div>
                           </div>
+                          <div className="col-span-3 flex flex-col justify-center">
+                            <input
+                              type="number"
+                              value={row.price || ''}
+                              onChange={(e) => {
+                                const newPrice = Number(e.target.value);
+                                const updated = [...contractRows];
+                                updated[idx] = { ...row, price: newPrice, unitPrice: newPrice };
+                                setContractRows(updated);
+                              }}
+                              onBlur={() => {
+                                if (row.particulars.trim().length >= 2 && row.price > 0) {
+                                  autoSaveContractProcedure(row.particulars, row.unitPrice || row.price);
+                                }
+                              }}
+                              placeholder="0"
+                              className="w-full px-1.5 py-1 border border-slate-300 rounded text-xs bg-white text-right font-bold text-slate-800 focus:outline-none focus:border-blue-500"
+                            />
+                            {countQuadrantTeeth(row.quadrant) > 1 && (row.unitPrice || row.price > 0) ? (
+                              <div
+                                className="text-[9px] text-blue-700 font-mono text-right font-semibold truncate mt-0.5"
+                                title={`${countQuadrantTeeth(row.quadrant)}টি দাঁত × ৳${row.unitPrice || row.price}`}
+                              >
+                                {countQuadrantTeeth(row.quadrant)}টি দাঁত × ৳{row.unitPrice || row.price}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="col-span-3">
-                          <input
-                            type="number"
-                            value={row.price || ''}
-                            onChange={(e) => {
-                              const updated = [...contractRows];
-                              updated[idx] = { ...row, price: Number(e.target.value) };
-                              setContractRows(updated);
-                            }}
-                            placeholder="0"
-                            className="w-full px-1.5 py-1 border border-slate-300 rounded text-xs bg-white text-right font-semibold"
-                          />
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
                 <div className="flex justify-center -mt-1 relative z-10">
@@ -1963,10 +3228,23 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                   <span className="text-slate-700 font-semibold w-28">Discount (TK)</span>
                   <input
                     type="number"
+                    step="any"
                     value={discountTk || ''}
                     onChange={(e) => {
-                      setDiscountTk(Number(e.target.value));
-                      setDiscountPercent(0);
+                      const rawVal = e.target.value;
+                      if (rawVal === '') {
+                        setDiscountTk(0);
+                        setDiscountPercent(0);
+                        return;
+                      }
+                      const valTk = Math.max(0, Number(rawVal) || 0);
+                      setDiscountTk(valTk);
+                      if (totalBill > 0 && valTk > 0) {
+                        const pct = Math.round(((valTk / totalBill) * 100) * 100) / 100;
+                        setDiscountPercent(pct);
+                      } else {
+                        setDiscountPercent(0);
+                      }
                     }}
                     placeholder="0"
                     className="w-full px-2 py-0.5 border border-slate-300 rounded bg-white text-right font-medium"
@@ -1976,10 +3254,23 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
                   <span className="text-slate-700 font-semibold w-28">Discount (%)</span>
                   <input
                     type="number"
+                    step="any"
                     value={discountPercent || ''}
                     onChange={(e) => {
-                      setDiscountPercent(Number(e.target.value));
-                      setDiscountTk(0);
+                      const rawVal = e.target.value;
+                      if (rawVal === '') {
+                        setDiscountPercent(0);
+                        setDiscountTk(0);
+                        return;
+                      }
+                      const valPct = Math.max(0, Number(rawVal) || 0);
+                      setDiscountPercent(valPct);
+                      if (totalBill > 0 && valPct > 0) {
+                        const tk = Math.round((totalBill * valPct) / 100);
+                        setDiscountTk(tk);
+                      } else {
+                        setDiscountTk(0);
+                      }
                     }}
                     placeholder="0"
                     className="w-full px-2 py-0.5 border border-slate-300 rounded bg-white text-right font-medium"
@@ -2010,16 +3301,30 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
             </div>
           </div>
 
-          {/* PAYMENT ENTRY SECTION (Matching Screenshot 2) */}
-          <div className="bg-[#e4eff9] border border-[#b2d2ec] rounded p-2.5 shadow-sm text-xs mb-2">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="font-bold text-slate-900 text-sm">Payment Entry</h3>
-              <div className="flex items-center space-x-1">
-                <span className="text-slate-600 font-semibold text-[11px]">Contact Status</span>
+          {/* SECTION 1 — PAYMENT ENTRY (পেমেন্ট ও লেজার) */}
+          <div className="bg-gradient-to-b from-[#f0f6fc] to-[#e4eff9] border border-[#b2d2ec] rounded-lg p-3 shadow-sm text-xs mb-3">
+            <div className="flex flex-wrap justify-between items-center pb-2 mb-2.5 border-b border-[#c8ddf0]">
+              <div className="flex items-center space-x-2">
+                <div className="w-7 h-7 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold shadow-sm">
+                  <CreditCard className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-baseline space-x-1.5">
+                    <h3 className="font-bold text-slate-900 text-sm">Payment Entry</h3>
+                    <span className="text-[11px] font-semibold text-blue-700 bg-blue-100/80 px-1.5 py-0.2 rounded">
+                      পেমেন্ট ও লেজার
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-slate-500">Record patient payments, track billing & live ledger</span>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2 mt-1 sm:mt-0">
+                <span className="text-slate-600 font-semibold text-[11px]">Contract Status:</span>
                 <select
                   value={contractStatus}
                   onChange={(e: any) => setContractStatus(e.target.value)}
-                  className="px-2 py-0.5 border border-yellow-400 rounded bg-[#fffc80] font-bold text-yellow-950 text-xs"
+                  className="px-2 py-0.5 border border-yellow-400 rounded bg-[#fffc80] font-bold text-yellow-950 text-xs shadow-xs focus:outline-none"
                 >
                   <option value="Open">Open</option>
                   <option value="In-Progress">In-Progress</option>
@@ -2028,35 +3333,465 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
               </div>
             </div>
 
-            <div className="grid grid-cols-12 gap-3 items-center">
-              <div className="col-span-12 md:col-span-4 flex items-center space-x-2">
-                <span className="font-bold text-slate-900 text-xs uppercase">PAID TODAY:</span>
-                <input
-                  type="number"
-                  value={paidToday || ''}
-                  onChange={(e) => setPaidToday(Number(e.target.value))}
-                  placeholder="0"
-                  className="w-full px-2.5 py-1 border-2 border-blue-400 rounded bg-white text-right font-bold text-blue-900 text-sm focus:outline-none focus:border-blue-600"
-                />
-              </div>
-
-              <div className="col-span-12 md:col-span-8 bg-white p-2 rounded border border-slate-300">
-                <div className="text-blue-700 font-bold text-[11px] mb-1">Current Deed Info</div>
-                <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="bg-slate-50 p-1 rounded border border-slate-200">
-                    <span className="text-slate-500 text-[10px] block">Total Bill</span>
-                    <span className="font-bold text-slate-800 text-xs">৳ {payableAmount}</span>
-                  </div>
-                  <div className="bg-emerald-50 p-1 rounded border border-emerald-200">
-                    <span className="text-emerald-700 text-[10px] block">Total Paid</span>
-                    <span className="font-bold text-emerald-800 text-xs">৳ {totalPaid}</span>
-                  </div>
-                  <div className="bg-red-50 p-1 rounded border border-red-200">
-                    <span className="text-red-700 text-[10px] block">Total Due</span>
-                    <span className="font-bold text-red-800 text-xs">৳ {totalDue}</span>
-                  </div>
+            {/* REAL-TIME CURRENT BILL INFO CARDS */}
+            <div className="grid grid-cols-3 gap-2.5 mb-3">
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider">Total Bill</span>
+                  <span className="w-2 h-2 rounded-full bg-slate-400"></span>
+                </div>
+                <div className="mt-1">
+                  <span className="text-base sm:text-lg font-black text-slate-800">৳ {payableAmount.toLocaleString()}</span>
+                  <span className="text-[10px] text-slate-400 block">মোট চুক্তি বিল</span>
                 </div>
               </div>
+
+              <div className="bg-emerald-50/90 p-2.5 rounded-lg border border-emerald-200 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-emerald-700 text-[10px] font-semibold uppercase tracking-wider">Total Paid</span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                </div>
+                <div className="mt-1">
+                  <span className="text-base sm:text-lg font-black text-emerald-800">৳ {totalPaid.toLocaleString()}</span>
+                  <span className="text-[10px] text-emerald-600 block">মোট জমা ({patientPayments.length} কিস্তি)</span>
+                </div>
+              </div>
+
+              <div className="bg-rose-50/90 p-2.5 rounded-lg border border-rose-200 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-rose-700 text-[10px] font-semibold uppercase tracking-wider">Total Due</span>
+                  <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                </div>
+                <div className="mt-1">
+                  <span className="text-base sm:text-lg font-black text-rose-800">৳ {totalDue.toLocaleString()}</span>
+                  <span className="text-[10px] text-rose-600 block">বর্তমান বকেয়া</span>
+                </div>
+              </div>
+            </div>
+
+            {/* PAYMENT INPUT FIELDS FORM */}
+            <div className="bg-white p-2.5 rounded-lg border border-[#b8d5ed] shadow-xs mb-3">
+              <div className="text-[11px] font-bold text-blue-900 mb-2 flex items-center justify-between">
+                <span>নতুন পেমেন্ট যোগ করুন / Record Collection</span>
+                {totalDue === 0 && payableAmount > 0 && (
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Fully Paid
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-12 gap-2 items-end">
+                <div className="col-span-12 sm:col-span-3">
+                  <label className="text-[10px] font-bold text-slate-700 block mb-0.5">
+                    PAID TODAY (আজকের জমা) <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2 top-1.5 font-bold text-slate-400">৳</span>
+                    <input
+                      type="number"
+                      value={paidToday || ''}
+                      onChange={(e) => setPaidToday(Number(e.target.value))}
+                      placeholder="0"
+                      className="w-full pl-6 pr-2 py-1 border-2 border-blue-400 rounded bg-blue-50/30 text-right font-bold text-blue-950 text-sm focus:outline-none focus:border-blue-600 focus:bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="col-span-6 sm:col-span-2">
+                  <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">তারিখ (Date)</label>
+                  <input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-slate-50 font-medium focus:bg-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div className="col-span-6 sm:col-span-2">
+                  <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">পেমেন্ট মেথড</label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-slate-50 font-medium focus:bg-white focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="Cash">Cash (নগদ)</option>
+                    <option value="bKash">bKash (বিকাশ)</option>
+                    <option value="Nagad">Nagad (নগদ অ্যাপ)</option>
+                    <option value="Card">Card (কার্ড)</option>
+                    <option value="Bank Transfer">Bank Transfer (ব্যাংক)</option>
+                    <option value="Other">Other (অন্যান্য)</option>
+                  </select>
+                </div>
+
+                <div className="col-span-8 sm:col-span-3">
+                  <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">রেফারেন্স / নোট</label>
+                  <input
+                    type="text"
+                    value={paymentNote}
+                    onChange={(e) => setPaymentNote(e.target.value)}
+                    placeholder="TrxID / Receipt / Note..."
+                    className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div className="col-span-4 sm:col-span-2">
+                  <button
+                    type="button"
+                    onClick={handleAddPayment}
+                    className="w-full py-1.5 px-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-xs rounded shadow-xs transition-colors flex items-center justify-center space-x-1"
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>Add Payment</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* PAYMENT LEDGER TABLE */}
+            <div className="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-xs">
+              <div className="px-2.5 py-1.5 bg-slate-100 border-b border-slate-200 flex justify-between items-center">
+                <span className="font-bold text-slate-800 text-[11px] flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-blue-600" />
+                  Payment Ledger (পেমেন্ট ট্রানজেকশন হিস্ট্রি)
+                </span>
+                <span className="text-[10px] font-semibold text-slate-500">
+                  Total Transactions: {patientPayments.length}
+                </span>
+              </div>
+
+              {patientPayments.length === 0 ? (
+                <div className="py-4 text-center text-slate-400 italic text-[11px]">
+                  কোন পূর্ববর্তী পেমেন্ট রেকর্ড পাওয়া যায়নি। উপরের ফর্ম থেকে পেমেন্ট যোগ করুন।
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-[11px]">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                        <th className="py-1 px-2.5">Date</th>
+                        <th className="py-1 px-2.5 text-right">Amount</th>
+                        <th className="py-1 px-2.5">Method</th>
+                        <th className="py-1 px-2.5">Reference / Note</th>
+                        <th className="py-1 px-2.5">Added By</th>
+                        <th className="py-1 px-2.5 text-center">Status</th>
+                        <th className="py-1 px-2 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {patientPayments.map((p, idx) => (
+                        <tr key={p.id || idx} className="hover:bg-blue-50/40 transition-colors">
+                          <td className="py-1 px-2.5 font-medium text-slate-800 whitespace-nowrap">
+                            {p.date}
+                          </td>
+                          <td className="py-1 px-2.5 text-right font-bold text-emerald-800 whitespace-nowrap">
+                            ৳ {(Number(p.paidAmount) || 0).toLocaleString()}
+                          </td>
+                          <td className="py-1 px-2.5 whitespace-nowrap">
+                            <span className="inline-block bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded text-[10px] font-semibold">
+                              {p.method || 'Cash'}
+                            </span>
+                          </td>
+                          <td className="py-1 px-2.5 text-slate-600 truncate max-w-[150px]">
+                            {p.note || '-'}
+                          </td>
+                          <td className="py-1 px-2.5 text-slate-500 text-[10px]">
+                            {p.addedBy || 'Staff'}
+                          </td>
+                          <td className="py-1 px-2.5 text-center whitespace-nowrap">
+                            <span className="inline-flex items-center gap-0.5 bg-emerald-100 text-emerald-800 text-[9px] font-bold px-1.5 py-0.2 rounded-full">
+                              <Check className="w-2.5 h-2.5" /> {p.status || 'Paid'}
+                            </span>
+                          </td>
+                          <td className="py-1 px-2 text-center whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePayment(p.id)}
+                              className="text-slate-400 hover:text-red-600 p-0.5 rounded transition-colors"
+                              title="Delete Payment"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* SECTION 2 — TREATMENT JOURNEY (Patient Treatment Timeline & Progress) */}
+          <div className="bg-gradient-to-b from-indigo-50/70 to-slate-50 border border-indigo-200 rounded-lg p-3 shadow-sm text-xs mb-3">
+            <div className="flex flex-wrap justify-between items-center pb-2.5 mb-2.5 border-b border-indigo-200">
+              <div className="flex items-center space-x-2">
+                <div className="w-7 h-7 rounded-md bg-indigo-600 text-white flex items-center justify-center font-bold shadow-sm">
+                  <Activity className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-baseline space-x-1.5">
+                    <h3 className="font-bold text-slate-900 text-sm">Treatment Journey</h3>
+                    <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded">
+                      Patient Treatment Timeline & Progress
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    Comprehensive multi-appointment dental treatment tracker across dates
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleOpenAddSessionModal}
+                className="mt-1 sm:mt-0 px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded font-bold text-xs shadow-xs transition-colors flex items-center space-x-1"
+              >
+                <span>+ Add Treatment Session</span>
+              </button>
+            </div>
+
+            {/* TREATMENT OVERVIEW METRICS */}
+            {(() => {
+              const totalSessionsCount = treatmentSessions.length;
+              const completedCount = treatmentSessions.filter(
+                (s) => (s.status || '').toLowerCase() === 'completed'
+              ).length;
+              const upcomingCount = treatmentSessions.filter(
+                (s) =>
+                  (s.status || '').toLowerCase() !== 'completed' &&
+                  (s.status || '').toLowerCase() !== 'cancelled'
+              ).length;
+              const progressPct =
+                totalSessionsCount > 0
+                  ? Math.round((completedCount / totalSessionsCount) * 100)
+                  : 0;
+
+              // Find earliest and latest dates
+              const sortedSessions = [...treatmentSessions].sort((a, b) =>
+                (a.date || '').localeCompare(b.date || '')
+              );
+              const startDate =
+                sortedSessions.length > 0 && sortedSessions[0].date
+                  ? sortedSessions[0].date
+                  : date || 'N/A';
+              const latestNextDate = sortedSessions.find((s) => s.nextDate)?.nextDate;
+              const expectedCompletion =
+                latestNextDate ||
+                (sortedSessions.length > 0 ? sortedSessions[sortedSessions.length - 1].date : 'TBD');
+
+              return (
+                <div className="bg-white rounded-lg border border-indigo-100 p-2.5 shadow-xs mb-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 text-center">
+                    <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                      <span className="text-[10px] text-slate-500 font-semibold uppercase block">Treatment Start</span>
+                      <span className="text-xs font-bold text-slate-800">{startDate}</span>
+                    </div>
+
+                    <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                      <span className="text-[10px] text-slate-500 font-semibold uppercase block">Expected End</span>
+                      <span className="text-xs font-bold text-indigo-900">{expectedCompletion}</span>
+                    </div>
+
+                    <div className="bg-blue-50/70 p-2 rounded border border-blue-100">
+                      <span className="text-[10px] text-blue-700 font-semibold uppercase block">Total Sessions</span>
+                      <span className="text-sm font-extrabold text-blue-900">{totalSessionsCount}</span>
+                    </div>
+
+                    <div className="bg-emerald-50/70 p-2 rounded border border-emerald-100">
+                      <span className="text-[10px] text-emerald-700 font-semibold uppercase block">Completed</span>
+                      <span className="text-sm font-extrabold text-emerald-800">{completedCount}</span>
+                    </div>
+
+                    <div className="bg-amber-50/70 p-2 rounded border border-amber-100">
+                      <span className="text-[10px] text-amber-700 font-semibold uppercase block">Upcoming</span>
+                      <span className="text-sm font-extrabold text-amber-900">{upcomingCount}</span>
+                    </div>
+
+                    <div className="bg-indigo-50/70 p-2 rounded border border-indigo-100 flex flex-col justify-center">
+                      <div className="flex justify-between items-center mb-1 text-[10px] font-bold text-indigo-900">
+                        <span>Progress</span>
+                        <span>{progressPct}%</span>
+                      </div>
+                      <div className="w-full bg-indigo-200 rounded-full h-2 overflow-hidden">
+                        <div
+                          className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${progressPct}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* TREATMENT TIMELINE */}
+            <div className="bg-white rounded-lg border border-indigo-100 p-3 shadow-xs">
+              <div className="text-[11px] font-bold text-slate-800 mb-3 flex items-center justify-between">
+                <span>Treatment Sessions & Timeline (ক্রমানুসারে সকল সেশন)</span>
+                <span className="text-[10px] text-slate-500">Chronological Order</span>
+              </div>
+
+              {treatmentSessions.length === 0 ? (
+                <div className="py-6 text-center text-slate-400 italic text-[11px] border border-dashed border-slate-200 rounded-lg">
+                  <Activity className="w-6 h-6 mx-auto mb-1 text-slate-300" />
+                  এখনও কোন চিকিৎসা সেশন (Treatment Session) যুক্ত করা হয়নি।
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={handleOpenAddSessionModal}
+                      className="px-3 py-1 bg-indigo-600 text-white rounded text-[11px] font-bold hover:bg-indigo-700 transition-colors"
+                    >
+                      + প্রথম সেশন যুক্ত করুন
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="relative pl-6 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-indigo-200 space-y-4">
+                  {[...treatmentSessions]
+                    .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+                    .map((sess, idx) => {
+                      const statusColor =
+                        sess.status === 'Completed'
+                          ? 'bg-emerald-500 ring-emerald-100'
+                          : sess.status === 'In Progress'
+                          ? 'bg-amber-500 ring-amber-100'
+                          : sess.status === 'Scheduled'
+                          ? 'bg-blue-500 ring-blue-100'
+                          : sess.status === 'Planned'
+                          ? 'bg-purple-500 ring-purple-100'
+                          : sess.status === 'Follow-up Required'
+                          ? 'bg-orange-500 ring-orange-100'
+                          : 'bg-slate-400 ring-slate-100';
+
+                      const badgeStyle =
+                        sess.status === 'Completed'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : sess.status === 'In Progress'
+                          ? 'bg-amber-100 text-amber-800 border-amber-300'
+                          : sess.status === 'Scheduled'
+                          ? 'bg-blue-100 text-blue-800 border-blue-300'
+                          : sess.status === 'Planned'
+                          ? 'bg-purple-100 text-purple-800 border-purple-300'
+                          : sess.status === 'Follow-up Required'
+                          ? 'bg-orange-100 text-orange-800 border-orange-300'
+                          : 'bg-slate-100 text-slate-700 border-slate-300';
+
+                      return (
+                        <div key={sess.id || idx} className="relative group">
+                          {/* TIMELINE BULLET */}
+                          <div
+                            className={`absolute -left-[23px] top-3 w-3.5 h-3.5 rounded-full ${statusColor} ring-4 border-2 border-white shadow-xs`}
+                          ></div>
+
+                          {/* COMPACT TREATMENT SESSION CARD */}
+                          <div className="bg-slate-50/70 hover:bg-indigo-50/40 transition-colors border border-slate-200 hover:border-indigo-300 rounded-lg p-2.5 shadow-xs">
+                            <div className="flex flex-wrap items-center justify-between gap-1 mb-1.5">
+                              <div className="flex items-center space-x-2">
+                                <span className="font-extrabold text-indigo-900 text-xs tracking-wide uppercase">
+                                  Session {sess.sessionNo < 10 ? `0${sess.sessionNo}` : sess.sessionNo}
+                                </span>
+                                <span className="text-slate-400">•</span>
+                                <span className="font-bold text-slate-800 text-[11px]">{sess.date}</span>
+                                {sess.time && (
+                                  <span className="text-slate-500 text-[10px]">({sess.time})</span>
+                                )}
+                              </div>
+
+                              <div className="flex items-center space-x-1.5">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${badgeStyle}`}>
+                                  {sess.status}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-12 gap-2 text-[11px] mb-2">
+                              <div className="col-span-12 sm:col-span-6 font-bold text-blue-900 flex items-center gap-1.5">
+                                <Stethoscope className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                <span>{sess.treatmentType || sess.procedureName || 'Dental Procedure'}</span>
+                              </div>
+
+                              <div className="col-span-12 sm:col-span-6 text-slate-700 flex items-center sm:justify-end gap-1">
+                                <span className="font-semibold text-slate-500">Tooth:</span>
+                                {sess.teeth && sess.teeth.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {sess.teeth.map((t) => (
+                                      <span
+                                        key={t}
+                                        className="bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-mono font-bold text-[10px] border border-blue-200"
+                                      >
+                                        #{t}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400 italic">None specified</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* COMPACT BEFORE / TREATMENT / AFTER HIGHLIGHTS */}
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 bg-white p-2 rounded border border-slate-100 text-[10px] mb-2">
+                              <div>
+                                <span className="font-bold text-slate-500 block uppercase">Before:</span>
+                                <p className="text-slate-700 line-clamp-1">
+                                  {sess.beforeCondition || sess.symptoms || sess.diagnosis || 'Initial status recorded'}
+                                </p>
+                              </div>
+                              <div>
+                                <span className="font-bold text-blue-600 block uppercase">Treatment:</span>
+                                <p className="text-slate-800 line-clamp-1">
+                                  {sess.procedureDetails || sess.procedureName || 'Procedure performed'}
+                                </p>
+                              </div>
+                              <div>
+                                <span className="font-bold text-emerald-600 block uppercase">After:</span>
+                                <p className="text-slate-700 line-clamp-1">
+                                  {sess.afterCondition || sess.treatmentResult || 'Tolerated procedure well'}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between pt-1 border-t border-slate-200/60 text-[10px]">
+                              <div className="text-slate-500">
+                                <span>Doctor: <strong className="text-slate-700">{sess.doctor || 'Staff Doctor'}</strong></span>
+                                {sess.nextTreatment && (
+                                  <span className="ml-2 text-indigo-700">
+                                    Next: <strong>{sess.nextTreatment}</strong> ({sess.nextDate || 'TBD'})
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="flex items-center space-x-1.5 mt-1 sm:mt-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setViewingSession(sess)}
+                                  className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded font-bold border border-indigo-200 transition-colors"
+                                >
+                                  [ View Details ]
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditSessionModal(sess)}
+                                  className="p-1 text-slate-500 hover:text-blue-600 rounded transition-colors"
+                                  title="Edit Session"
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteTreatmentSession(sess.id)}
+                                  className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors"
+                                  title="Delete Session"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
             </div>
           </div>
 
@@ -2446,6 +4181,1091 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
         </div>
       </div>
 
+      {/* VIEW TREATMENT SESSION DETAILS MODAL */}
+      {viewingSession && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden border border-slate-300 max-h-[90vh] flex flex-col">
+            <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-blue-800 text-white px-5 py-3 flex justify-between items-center font-bold shadow-sm">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
+                  <Activity className="w-5 h-5 text-indigo-200" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-base font-extrabold">
+                      Session {viewingSession.sessionNo < 10 ? `0${viewingSession.sessionNo}` : viewingSession.sessionNo}
+                    </span>
+                    <span className="text-indigo-200">•</span>
+                    <span className="text-sm font-semibold">{viewingSession.treatmentType || viewingSession.procedureName}</span>
+                  </div>
+                  <span className="text-xs text-indigo-200 font-normal">
+                    Date: {viewingSession.date} {viewingSession.time ? `• Time: ${viewingSession.time}` : ''}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-white/20 text-white border border-white/30">
+                  {viewingSession.status}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setViewingSession(null)}
+                  className="hover:bg-white/20 p-1.5 rounded-lg transition-colors text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 text-xs font-sans">
+              {/* META INFO BAR */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <div>
+                  <span className="text-slate-400 text-[10px] block font-semibold uppercase">Doctor</span>
+                  <span className="font-bold text-slate-800">{viewingSession.doctor || 'Staff Doctor'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-[10px] block font-semibold uppercase">Assistant</span>
+                  <span className="font-bold text-slate-800">{viewingSession.assistant || 'N/A'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-[10px] block font-semibold uppercase">Duration</span>
+                  <span className="font-bold text-slate-800">{viewingSession.duration || 'N/A'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-[10px] block font-semibold uppercase">Patient Reg</span>
+                  <span className="font-bold text-blue-900 font-mono">#{viewingSession.regNo}</span>
+                </div>
+              </div>
+
+              {/* TEETH TREATED */}
+              <div className="bg-blue-50/60 p-3 rounded-lg border border-blue-100 flex items-center justify-between">
+                <span className="font-bold text-blue-900">চিকিৎসাকৃত দাঁতের নম্বর (Teeth Involved):</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {viewingSession.teeth && viewingSession.teeth.length > 0 ? (
+                    viewingSession.teeth.map((tooth) => (
+                      <span
+                        key={tooth}
+                        className="bg-blue-600 text-white font-mono font-bold px-2 py-0.5 rounded text-xs shadow-xs"
+                      >
+                        #{tooth}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-slate-400 italic">কোন দাঁত নির্বাচন করা হয়নি</span>
+                  )}
+                </div>
+              </div>
+
+              {/* BEFORE TREATMENT */}
+              <div className="border border-slate-200 rounded-lg overflow-hidden shadow-xs">
+                <div className="bg-amber-500/10 px-3 py-1.5 border-b border-amber-200 text-amber-900 font-bold flex items-center justify-between">
+                  <span>1. Before Treatment (চিকিৎসার পূর্বাবস্থা ও ডায়াগনোসিস)</span>
+                  {viewingSession.painLevelBefore !== undefined && (
+                    <span className="text-[11px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold border border-amber-300">
+                      Pain Scale: <strong>{viewingSession.painLevelBefore}/10</strong>
+                    </span>
+                  )}
+                </div>
+                <div className="p-3 space-y-2 bg-white">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Patient Condition:</span>
+                      <p className="text-slate-800 font-medium">{viewingSession.beforeCondition || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Symptoms:</span>
+                      <p className="text-slate-800 font-medium">{viewingSession.symptoms || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Diagnosis:</span>
+                      <p className="text-slate-800 font-medium">{viewingSession.diagnosis || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Tooth Condition:</span>
+                      <p className="text-slate-800 font-medium">{viewingSession.toothCondition || 'N/A'}</p>
+                    </div>
+                  </div>
+                  {viewingSession.clinicalFindings && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <span className="text-slate-500 font-semibold block text-[11px]">Clinical Findings:</span>
+                      <p className="text-slate-700">{viewingSession.clinicalFindings}</p>
+                    </div>
+                  )}
+                  {viewingSession.xrayScanNote && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <span className="text-slate-500 font-semibold block text-[11px]">X-Ray / Scan Findings:</span>
+                      <p className="text-slate-700">{viewingSession.xrayScanNote}</p>
+                    </div>
+                  )}
+                  {viewingSession.beforeDoctorNotes && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <span className="text-slate-500 font-semibold block text-[11px]">Doctor Notes:</span>
+                      <p className="text-slate-700 italic">{viewingSession.beforeDoctorNotes}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* TREATMENT PERFORMED */}
+              <div className="border border-slate-200 rounded-lg overflow-hidden shadow-xs">
+                <div className="bg-blue-600/10 px-3 py-1.5 border-b border-blue-200 text-blue-900 font-bold flex items-center justify-between">
+                  <span>2. Treatment Performed (প্রদত্ত চিকিৎসা কার্যপদ্ধতি)</span>
+                  <span className="text-[11px] text-blue-800 font-semibold">
+                    {viewingSession.procedureName}
+                  </span>
+                </div>
+                <div className="p-3 space-y-2 bg-white">
+                  <div>
+                    <span className="text-slate-500 font-semibold block text-[11px]">Procedure Details:</span>
+                    <p className="text-slate-800 leading-relaxed font-sans whitespace-pre-line">
+                      {viewingSession.procedureDetails || 'Procedure completed as planned.'}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Materials Used:</span>
+                      <p className="text-slate-800">{viewingSession.materialsUsed || 'Standard dental materials'}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Medication / Anesthesia Used:</span>
+                      <p className="text-slate-800">{viewingSession.medicationUsed || 'N/A'}</p>
+                    </div>
+                  </div>
+                  {viewingSession.treatmentDoctorNotes && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <span className="text-slate-500 font-semibold block text-[11px]">Treatment Notes:</span>
+                      <p className="text-slate-700 italic">{viewingSession.treatmentDoctorNotes}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* AFTER TREATMENT */}
+              <div className="border border-slate-200 rounded-lg overflow-hidden shadow-xs">
+                <div className="bg-emerald-600/10 px-3 py-1.5 border-b border-emerald-200 text-emerald-900 font-bold flex items-center justify-between">
+                  <span>3. After Treatment (চিকিৎসা পরবর্তী ফলাফল ও পরামর্শ)</span>
+                  {viewingSession.painLevelAfter !== undefined && (
+                    <span className="text-[11px] bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded font-semibold border border-emerald-300">
+                      Pain Scale: <strong>{viewingSession.painLevelAfter}/10</strong>
+                    </span>
+                  )}
+                </div>
+                <div className="p-3 space-y-2 bg-white">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Patient Condition After:</span>
+                      <p className="text-slate-800">{viewingSession.afterCondition || 'Stable'}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Treatment Result:</span>
+                      <p className="text-slate-800">{viewingSession.treatmentResult || 'Satisfactory'}</p>
+                    </div>
+                  </div>
+                  {viewingSession.clinicalObservation && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <span className="text-slate-500 font-semibold block text-[11px]">Clinical Observation:</span>
+                      <p className="text-slate-700">{viewingSession.clinicalObservation}</p>
+                    </div>
+                  )}
+                  {viewingSession.postInstructions && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <span className="text-slate-500 font-semibold block text-[11px]">Post-Treatment Instructions:</span>
+                      <p className="text-slate-800 font-medium whitespace-pre-line">{viewingSession.postInstructions}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* NEXT TREATMENT */}
+              {viewingSession.nextTreatment && (
+                <div className="border border-indigo-200 rounded-lg overflow-hidden shadow-xs bg-indigo-50/40">
+                  <div className="bg-indigo-600 text-white px-3 py-1.5 font-bold flex items-center justify-between">
+                    <span>4. Next Planned Treatment (পরবর্তী চিকিৎসা ও সাক্ষাত)</span>
+                    <span className="text-xs bg-white/20 px-2 py-0.5 rounded font-mono">
+                      {viewingSession.nextDate || 'Date TBD'}
+                    </span>
+                  </div>
+                  <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Next Treatment:</span>
+                      <p className="font-bold text-indigo-900">{viewingSession.nextTreatment}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-semibold block text-[11px]">Next Tooth:</span>
+                      <p className="font-bold text-slate-800">
+                        {viewingSession.nextTeeth && viewingSession.nextTeeth.length > 0
+                          ? viewingSession.nextTeeth.join(', ')
+                          : 'Same as current'}
+                      </p>
+                    </div>
+                    {viewingSession.nextPurpose && (
+                      <div className="col-span-2">
+                        <span className="text-slate-500 font-semibold block text-[11px]">Purpose / Goal:</span>
+                        <p className="text-slate-800">{viewingSession.nextPurpose}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 bg-slate-100 border-t border-slate-200 flex justify-between items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  const s = viewingSession;
+                  setViewingSession(null);
+                  handleOpenEditSessionModal(s);
+                }}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1.5 transition-colors shadow-xs"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Edit This Session</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingSession(null)}
+                className="px-4 py-1.5 bg-slate-300 hover:bg-slate-400 text-slate-800 font-bold rounded-lg text-xs transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7-STEP ADD / EDIT TREATMENT SESSION MODAL */}
+      {showAddSessionModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden border border-slate-300 max-h-[92vh] flex flex-col">
+            {/* MODAL HEADER */}
+            <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-blue-800 text-white px-5 py-3 flex justify-between items-center font-bold shadow-sm">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
+                  <Activity className="w-5 h-5 text-indigo-200" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold">
+                    {editingSessionId ? 'Edit Treatment Session' : '+ Add Treatment Session'}
+                  </h3>
+                  <span className="text-xs text-indigo-200 font-normal">
+                    Patient Reg #{regNo} • {patientName || 'Patient'}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddSessionModal(false)}
+                className="hover:bg-white/20 p-1.5 rounded-lg transition-colors text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* 7-STEP WIZARD PROGRESS BAR */}
+            <div className="bg-slate-100 border-b border-slate-200 px-4 py-2 overflow-x-auto">
+              <div className="flex items-center justify-between min-w-[620px] text-[11px] font-semibold">
+                {[
+                  { step: 1, label: '1. Session Info' },
+                  { step: 2, label: '2. Tooth Selection' },
+                  { step: 3, label: '3. Before Treatment' },
+                  { step: 4, label: '4. Performed' },
+                  { step: 5, label: '5. After Treatment' },
+                  { step: 6, label: '6. Next Plan' },
+                  { step: 7, label: '7. Attachments' },
+                ].map((st) => (
+                  <button
+                    key={st.step}
+                    type="button"
+                    onClick={() => setSessionStep(st.step)}
+                    className={`flex items-center space-x-1 px-2.5 py-1 rounded-md transition-all ${
+                      sessionStep === st.step
+                        ? 'bg-indigo-600 text-white shadow-xs font-bold'
+                        : sessionStep > st.step
+                        ? 'bg-indigo-100 text-indigo-800 hover:bg-indigo-200'
+                        : 'text-slate-500 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>{st.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* MODAL STEP BODY */}
+            <div className="p-5 overflow-y-auto flex-1 text-xs font-sans">
+              {/* STEP 1: SESSION INFORMATION */}
+              {sessionStep === 1 && (
+                <div className="space-y-4">
+                  <div className="bg-indigo-50/60 p-3 rounded-lg border border-indigo-100">
+                    <h4 className="font-bold text-indigo-950 text-sm mb-1">Step 1: Session Information (সেশন সাধারণ তথ্য)</h4>
+                    <p className="text-slate-600 text-[11px]">
+                      চিকিৎসা সেশনের ক্রমিক নম্বর, তারিখ, সময়, সংশ্লিষ্ট ডাক্তার ও বর্তমান অবস্থা নির্ধারণ করুন।
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-3">
+                    <div className="col-span-6 sm:col-span-3">
+                      <label className="font-bold text-slate-700 block mb-1">Session Number</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={sessionForm.sessionNo}
+                        onChange={(e) => setSessionForm({ ...sessionForm, sessionNo: Number(e.target.value) })}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-bold text-slate-900 focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-6 sm:col-span-4">
+                      <label className="font-bold text-slate-700 block mb-1">Treatment Date</label>
+                      <input
+                        type="date"
+                        value={sessionForm.date}
+                        onChange={(e) => setSessionForm({ ...sessionForm, date: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-semibold text-slate-900 focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-5">
+                      <label className="font-bold text-slate-700 block mb-1">Appointment Time</label>
+                      <input
+                        type="text"
+                        value={sessionForm.time}
+                        onChange={(e) => setSessionForm({ ...sessionForm, time: e.target.value })}
+                        placeholder="e.g. 10:30 AM or 04:00 PM"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Doctor Name</label>
+                      <input
+                        type="text"
+                        value={sessionForm.doctor}
+                        onChange={(e) => setSessionForm({ ...sessionForm, doctor: e.target.value })}
+                        placeholder="Attending Dental Surgeon"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-medium focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Dental Assistant</label>
+                      <input
+                        type="text"
+                        value={sessionForm.assistant}
+                        onChange={(e) => setSessionForm({ ...sessionForm, assistant: e.target.value })}
+                        placeholder="Assisting Nurse / Tech"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Treatment Type</label>
+                      <input
+                        type="text"
+                        value={sessionForm.treatmentType}
+                        onChange={(e) => setSessionForm({ ...sessionForm, treatmentType: e.target.value })}
+                        placeholder="e.g. Root Canal Treatment, Crown Preparation, Extraction, Scaling"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-semibold text-blue-900 focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Session Status</label>
+                      <select
+                        value={sessionForm.status}
+                        onChange={(e: any) => setSessionForm({ ...sessionForm, status: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-bold text-slate-800 bg-white focus:outline-none focus:border-indigo-600"
+                      >
+                        <option value="Completed">Completed (সম্পন্ন)</option>
+                        <option value="In Progress">In Progress (চলমান)</option>
+                        <option value="Scheduled">Scheduled (নির্ধারিত)</option>
+                        <option value="Planned">Planned (পরিকল্পিত)</option>
+                        <option value="Follow-up Required">Follow-up Required (ফলো-আপ প্রয়োজন)</option>
+                        <option value="Cancelled">Cancelled (বাতিল)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 2: TOOTH SELECTION */}
+              {sessionStep === 2 && (
+                <div className="space-y-4">
+                  <div className="bg-indigo-50/60 p-3 rounded-lg border border-indigo-100 flex justify-between items-center">
+                    <div>
+                      <h4 className="font-bold text-indigo-950 text-sm mb-1">Step 2: Tooth Selection (দাঁত নির্বাচন)</h4>
+                      <p className="text-slate-600 text-[11px]">
+                        এই সেশনে চিকিৎসাকৃত দাঁতগুলো ক্লিক করে সিলেক্ট করুন (FDI Notation #11 to #48)।
+                      </p>
+                    </div>
+                    {sessionForm.teeth.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSessionForm({ ...sessionForm, teeth: [] })}
+                        className="text-[11px] text-red-600 hover:underline font-semibold"
+                      >
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+
+                  {/* SELECTED TEETH DISPLAY */}
+                  <div className="p-3 bg-white border border-slate-200 rounded-lg flex items-center justify-between">
+                    <span className="font-bold text-slate-700">নির্বাচিত দাঁত (Selected Teeth):</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {sessionForm.teeth.length === 0 ? (
+                        <span className="text-slate-400 italic">এখনও কোন দাঁত সিলেক্ট করা হয়নি</span>
+                      ) : (
+                        sessionForm.teeth.map((tooth) => (
+                          <span
+                            key={tooth}
+                            className="bg-indigo-600 text-white font-mono font-bold px-2 py-0.5 rounded text-xs flex items-center gap-1 shadow-xs"
+                          >
+                            <span>#{tooth}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleToothInSession(tooth)}
+                              className="hover:text-red-200"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* DENTAL CHART QUADRANTS FOR QUICK SELECTION */}
+                  <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-3">
+                    <div className="text-center font-bold text-slate-700 text-xs uppercase tracking-wider">
+                      Adult Dentition Quadrants (FDI Chart)
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      {/* UPPER RIGHT (UR 18..11) */}
+                      <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs">
+                        <div className="text-[11px] font-bold text-blue-900 mb-1.5 flex justify-between">
+                          <span>Upper Right (UR / Q1)</span>
+                          <span className="text-slate-400">18 - 11</span>
+                        </div>
+                        <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
+                          {['18', '17', '16', '15', '14', '13', '12', '11'].map((t) => {
+                            const isSelected = sessionForm.teeth.includes(t);
+                            return (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => handleToggleToothInSession(t)}
+                                className={`py-1.5 font-mono font-bold rounded text-xs border transition-all ${
+                                  isSelected
+                                    ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                                    : 'bg-slate-50 hover:bg-indigo-50 text-slate-800 border-slate-200'
+                                }`}
+                              >
+                                {t}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* UPPER LEFT (UL 21..28) */}
+                      <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs">
+                        <div className="text-[11px] font-bold text-blue-900 mb-1.5 flex justify-between">
+                          <span>Upper Left (UL / Q2)</span>
+                          <span className="text-slate-400">21 - 28</span>
+                        </div>
+                        <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
+                          {['21', '22', '23', '24', '25', '26', '27', '28'].map((t) => {
+                            const isSelected = sessionForm.teeth.includes(t);
+                            return (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => handleToggleToothInSession(t)}
+                                className={`py-1.5 font-mono font-bold rounded text-xs border transition-all ${
+                                  isSelected
+                                    ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                                    : 'bg-slate-50 hover:bg-indigo-50 text-slate-800 border-slate-200'
+                                }`}
+                              >
+                                {t}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* LOWER RIGHT (LR 48..41) */}
+                      <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs">
+                        <div className="text-[11px] font-bold text-blue-900 mb-1.5 flex justify-between">
+                          <span>Lower Right (LR / Q4)</span>
+                          <span className="text-slate-400">48 - 41</span>
+                        </div>
+                        <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
+                          {['48', '47', '46', '45', '44', '43', '42', '41'].map((t) => {
+                            const isSelected = sessionForm.teeth.includes(t);
+                            return (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => handleToggleToothInSession(t)}
+                                className={`py-1.5 font-mono font-bold rounded text-xs border transition-all ${
+                                  isSelected
+                                    ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                                    : 'bg-slate-50 hover:bg-indigo-50 text-slate-800 border-slate-200'
+                                }`}
+                              >
+                                {t}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* LOWER LEFT (LL 31..38) */}
+                      <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs">
+                        <div className="text-[11px] font-bold text-blue-900 mb-1.5 flex justify-between">
+                          <span>Lower Left (LL / Q3)</span>
+                          <span className="text-slate-400">31 - 38</span>
+                        </div>
+                        <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
+                          {['31', '32', '33', '34', '35', '36', '37', '38'].map((t) => {
+                            const isSelected = sessionForm.teeth.includes(t);
+                            return (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => handleToggleToothInSession(t)}
+                                className={`py-1.5 font-mono font-bold rounded text-xs border transition-all ${
+                                  isSelected
+                                    ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                                    : 'bg-slate-50 hover:bg-indigo-50 text-slate-800 border-slate-200'
+                                }`}
+                              >
+                                {t}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 3: BEFORE TREATMENT */}
+              {sessionStep === 3 && (
+                <div className="space-y-4">
+                  <div className="bg-amber-500/10 p-3 rounded-lg border border-amber-200">
+                    <h4 className="font-bold text-amber-950 text-sm mb-1">Step 3: Before Treatment (রোগীর পূর্বাবস্থা ও পরীক্ষা)</h4>
+                    <p className="text-slate-600 text-[11px]">
+                      চিকিৎসার শুরুতে রোগীর শারীরিক অবস্থা, লক্ষণ, ডায়াগনোসিস ও পেইন স্কেল নথিভুক্ত করুন।
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-3">
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Patient Condition (রোগীর শারীরিক অবস্থা)</label>
+                      <input
+                        type="text"
+                        value={sessionForm.beforeCondition}
+                        onChange={(e) => setSessionForm({ ...sessionForm, beforeCondition: e.target.value })}
+                        placeholder="e.g. Mild anxiety, spontaneous severe throbbing pain"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Diagnosis (রোগনির্ণয়)</label>
+                      <input
+                        type="text"
+                        value={sessionForm.diagnosis}
+                        onChange={(e) => setSessionForm({ ...sessionForm, diagnosis: e.target.value })}
+                        placeholder="e.g. Irreversible Pulpitis, Periapical Abscess"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Symptoms (রোগের লক্ষণাবলী)</label>
+                      <textarea
+                        rows={2}
+                        value={sessionForm.symptoms}
+                        onChange={(e) => setSessionForm({ ...sessionForm, symptoms: e.target.value })}
+                        placeholder="Pain on chewing, sensitivity to cold/hot, swelling..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Tooth Condition (দাঁতের অবস্থা)</label>
+                      <textarea
+                        rows={2}
+                        value={sessionForm.toothCondition}
+                        onChange={(e) => setSessionForm({ ...sessionForm, toothCondition: e.target.value })}
+                        placeholder="Deep occlusal caries, fractured cusp, mobile..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+
+                    {/* PAIN LEVEL SLIDER */}
+                    <div className="col-span-12 bg-white p-3 rounded-lg border border-slate-200">
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="font-bold text-slate-700">Pain Level (ব্যথার মাত্রা: 0 - 10)</label>
+                        <span className="font-black text-sm px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
+                          {sessionForm.painLevelBefore} / 10
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="10"
+                        value={sessionForm.painLevelBefore}
+                        onChange={(e) => setSessionForm({ ...sessionForm, painLevelBefore: Number(e.target.value) })}
+                        className="w-full accent-amber-600 cursor-pointer"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-400 font-semibold px-1 mt-1">
+                        <span>0: No Pain</span>
+                        <span>3: Mild</span>
+                        <span>5: Moderate</span>
+                        <span>8: Severe</span>
+                        <span>10: Worst Possible</span>
+                      </div>
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Clinical Findings</label>
+                      <input
+                        type="text"
+                        value={sessionForm.clinicalFindings}
+                        onChange={(e) => setSessionForm({ ...sessionForm, clinicalFindings: e.target.value })}
+                        placeholder="Tender to percussion, probing depth 3mm..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">X-Ray / Scan Details</label>
+                      <input
+                        type="text"
+                        value={sessionForm.xrayScanNote}
+                        onChange={(e) => setSessionForm({ ...sessionForm, xrayScanNote: e.target.value })}
+                        placeholder="IOPA shows radiolucency around apex of #16..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12">
+                      <label className="font-bold text-slate-700 block mb-1">Doctor Pre-treatment Notes</label>
+                      <textarea
+                        rows={2}
+                        value={sessionForm.beforeDoctorNotes}
+                        onChange={(e) => setSessionForm({ ...sessionForm, beforeDoctorNotes: e.target.value })}
+                        placeholder="Special clinical observations or precautions prior to starting procedure..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 4: TREATMENT PERFORMED */}
+              {sessionStep === 4 && (
+                <div className="space-y-4">
+                  <div className="bg-blue-600/10 p-3 rounded-lg border border-blue-200">
+                    <h4 className="font-bold text-blue-950 text-sm mb-1">Step 4: Treatment Performed (প্রদত্ত চিকিৎসা বিবরণ)</h4>
+                    <p className="text-slate-600 text-[11px]">
+                      এই সেশনে সম্পন্নকৃত চিকিৎসা পদ্ধতি, ব্যবহৃত ম্যাটেরিয়ালস এবং মেডিসিনের তথ্য লিখুন।
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-3">
+                    <div className="col-span-12 sm:col-span-8">
+                      <label className="font-bold text-slate-700 block mb-1">Procedure Name (চিকিৎসার নাম)</label>
+                      <input
+                        type="text"
+                        value={sessionForm.procedureName}
+                        onChange={(e) => setSessionForm({ ...sessionForm, procedureName: e.target.value })}
+                        placeholder="e.g. Root Canal Treatment, Crown Prep, Light Cure Composite Filling"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-semibold text-blue-900 focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-4">
+                      <label className="font-bold text-slate-700 block mb-1">Procedure Duration</label>
+                      <input
+                        type="text"
+                        value={sessionForm.duration}
+                        onChange={(e) => setSessionForm({ ...sessionForm, duration: e.target.value })}
+                        placeholder="e.g. 45 mins"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12">
+                      <label className="font-bold text-slate-700 block mb-1">
+                        Procedure Details (সম্পূর্ণ কার্যপদ্ধতি / কি কি কাজ করা হয়েছে)
+                      </label>
+                      <textarea
+                        rows={4}
+                        value={sessionForm.procedureDetails}
+                        onChange={(e) => setSessionForm({ ...sessionForm, procedureDetails: e.target.value })}
+                        placeholder="Access opening, cleaning and shaping, irrigation with 3% NaOCl, working length MB:20mm, DB:20mm, P:21mm, calcium hydroxide placed..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Materials Used (ব্যবহৃত সামগ্রী)</label>
+                      <input
+                        type="text"
+                        value={sessionForm.materialsUsed}
+                        onChange={(e) => setSessionForm({ ...sessionForm, materialsUsed: e.target.value })}
+                        placeholder="Rotary files, Cavit temporary restoration, EDTA gel..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Medication / Anesthesia Used</label>
+                      <input
+                        type="text"
+                        value={sessionForm.medicationUsed}
+                        onChange={(e) => setSessionForm({ ...sessionForm, medicationUsed: e.target.value })}
+                        placeholder="Lignocaine 2% with 1:80000 adrenaline (1.8ml)..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12">
+                      <label className="font-bold text-slate-700 block mb-1">Doctor Procedure Notes</label>
+                      <textarea
+                        rows={2}
+                        value={sessionForm.treatmentDoctorNotes}
+                        onChange={(e) => setSessionForm({ ...sessionForm, treatmentDoctorNotes: e.target.value })}
+                        placeholder="Any procedural observations or notes during surgery/treatment..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 5: AFTER TREATMENT */}
+              {sessionStep === 5 && (
+                <div className="space-y-4">
+                  <div className="bg-emerald-600/10 p-3 rounded-lg border border-emerald-200">
+                    <h4 className="font-bold text-emerald-950 text-sm mb-1">Step 5: After Treatment (চিকিৎসা পরবর্তী অবস্থা ও পরামর্শ)</h4>
+                    <p className="text-slate-600 text-[11px]">
+                      চিকিৎসার পর রোগীর অবস্থা, ব্যথার পরিবর্তন, তাৎক্ষণিক ফলাফল ও রোগীকে দেওয়া দিকনির্দেশনা লিখুন।
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-3">
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Patient Condition After (চিকিৎসা পরবর্তী অবস্থা)</label>
+                      <input
+                        type="text"
+                        value={sessionForm.afterCondition}
+                        onChange={(e) => setSessionForm({ ...sessionForm, afterCondition: e.target.value })}
+                        placeholder="Patient tolerated procedure well, calm, vitals stable"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Treatment Result (তাৎক্ষণিক ফলাফল)</label>
+                      <input
+                        type="text"
+                        value={sessionForm.treatmentResult}
+                        onChange={(e) => setSessionForm({ ...sessionForm, treatmentResult: e.target.value })}
+                        placeholder="Temporary filling placed, bleeding arrested"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    {/* PAIN LEVEL AFTER SLIDER */}
+                    <div className="col-span-12 bg-white p-3 rounded-lg border border-slate-200">
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="font-bold text-slate-700">Pain Level After Treatment (চিকিৎসার পর ব্যথার মাত্রা: 0 - 10)</label>
+                        <span className="font-black text-sm px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300">
+                          {sessionForm.painLevelAfter} / 10
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="10"
+                        value={sessionForm.painLevelAfter}
+                        onChange={(e) => setSessionForm({ ...sessionForm, painLevelAfter: Number(e.target.value) })}
+                        className="w-full accent-emerald-600 cursor-pointer"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-400 font-semibold px-1 mt-1">
+                        <span>0: No Pain</span>
+                        <span>2: Minimal soreness</span>
+                        <span>5: Moderate</span>
+                        <span>8: High</span>
+                        <span>10: Extreme</span>
+                      </div>
+                    </div>
+
+                    <div className="col-span-12">
+                      <label className="font-bold text-slate-700 block mb-1">Clinical Observation (ক্লিনিক্যাল পর্যবেক্ষণ)</label>
+                      <textarea
+                        rows={2}
+                        value={sessionForm.clinicalObservation}
+                        onChange={(e) => setSessionForm({ ...sessionForm, clinicalObservation: e.target.value })}
+                        placeholder="Good seal achieved, no high spot on occlusion, no bleeding..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+
+                    <div className="col-span-12">
+                      <label className="font-bold text-slate-700 block mb-1">Post-treatment Instructions (রোগীর জন্য পরামর্শ)</label>
+                      <textarea
+                        rows={3}
+                        value={sessionForm.postInstructions}
+                        onChange={(e) => setSessionForm({ ...sessionForm, postInstructions: e.target.value })}
+                        placeholder="Do not chew hard foods on treated tooth for 24 hours. Take pain medication if needed..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+
+                    <div className="col-span-12">
+                      <label className="flex items-center space-x-2 cursor-pointer font-bold text-slate-800">
+                        <input
+                          type="checkbox"
+                          checked={sessionForm.followUpRequired}
+                          onChange={(e) => setSessionForm({ ...sessionForm, followUpRequired: e.target.checked })}
+                          className="w-4 h-4 rounded text-indigo-600 focus:ring-0 cursor-pointer"
+                        />
+                        <span>এই রোগীর জন্য পরবর্তী ফলো-আপ বা পরবর্তী সেশন আবশ্যক (Follow-up Required)</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 6: NEXT TREATMENT / FOLLOW-UP */}
+              {sessionStep === 6 && (
+                <div className="space-y-4">
+                  <div className="bg-indigo-50/60 p-3 rounded-lg border border-indigo-100">
+                    <h4 className="font-bold text-indigo-950 text-sm mb-1">Step 6: Next Treatment / Follow-up (পরবর্তী চিকিৎসা পরিকল্পনা)</h4>
+                    <p className="text-slate-600 text-[11px]">
+                      পরবর্তী সাক্ষাতের সম্ভাব্য তারিখ এবং কি চিকিৎসা দেওয়া হবে তা পূর্বপরিকল্পনা করুন।
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-3">
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Next Treatment Date (পরবর্তী তারিখ)</label>
+                      <input
+                        type="date"
+                        value={sessionForm.nextDate}
+                        onChange={(e) => setSessionForm({ ...sessionForm, nextDate: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-semibold text-slate-900 focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Next Treatment (পরবর্তী চিকিৎসা)</label>
+                      <input
+                        type="text"
+                        value={sessionForm.nextTreatment}
+                        onChange={(e) => setSessionForm({ ...sessionForm, nextTreatment: e.target.value })}
+                        placeholder="e.g. Obturation & Permanent Core Build-up, Crown Prep"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-bold text-indigo-900 focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-4">
+                      <label className="font-bold text-slate-700 block mb-1">Tooth Number(s)</label>
+                      <input
+                        type="text"
+                        value={sessionForm.nextTeeth ? sessionForm.nextTeeth.join(', ') : ''}
+                        onChange={(e) =>
+                          setSessionForm({
+                            ...sessionForm,
+                            nextTeeth: e.target.value
+                              .split(',')
+                              .map((s) => s.trim())
+                              .filter(Boolean),
+                          })
+                        }
+                        placeholder="e.g. #16, #17"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-8">
+                      <label className="font-bold text-slate-700 block mb-1">Purpose of Next Session (উদ্দেশ্য)</label>
+                      <input
+                        type="text"
+                        value={sessionForm.nextPurpose}
+                        onChange={(e) => setSessionForm({ ...sessionForm, nextPurpose: e.target.value })}
+                        placeholder="e.g. Complete root canal obturation, crown shade selection"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600"
+                      />
+                    </div>
+
+                    <div className="col-span-12">
+                      <label className="font-bold text-slate-700 block mb-1">Special Follow-up Instructions</label>
+                      <textarea
+                        rows={3}
+                        value={sessionForm.nextInstructions}
+                        onChange={(e) => setSessionForm({ ...sessionForm, nextInstructions: e.target.value })}
+                        placeholder="Return earlier if swelling occurs or if temporary restoration chips off..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 7: ATTACHMENTS & CONFIRMATION */}
+              {sessionStep === 7 && (
+                <div className="space-y-4">
+                  <div className="bg-indigo-50/60 p-3 rounded-lg border border-indigo-100">
+                    <h4 className="font-bold text-indigo-950 text-sm mb-1">Step 7: Attachments & Review (সংযুক্তি ও নিশ্চিতকরণ)</h4>
+                    <p className="text-slate-600 text-[11px]">
+                      এক্স-রে বা ক্লিনিক্যাল ছবি এবং অতিরিক্ত নোট পর্যালোচনা করে সেশনটি সেভ করুন।
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-3">
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">Before Treatment Photo / X-Ray Notes</label>
+                      <textarea
+                        rows={2}
+                        value={sessionForm.beforePhotos ? sessionForm.beforePhotos.join(', ') : ''}
+                        onChange={(e) =>
+                          setSessionForm({
+                            ...sessionForm,
+                            beforePhotos: e.target.value
+                              .split(',')
+                              .map((s) => s.trim())
+                              .filter(Boolean),
+                          })
+                        }
+                        placeholder="Pre-op intraoral photograph file reference or notes..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="font-bold text-slate-700 block mb-1">After Treatment Photo / X-Ray Notes</label>
+                      <textarea
+                        rows={2}
+                        value={sessionForm.afterPhotos ? sessionForm.afterPhotos.join(', ') : ''}
+                        onChange={(e) =>
+                          setSessionForm({
+                            ...sessionForm,
+                            afterPhotos: e.target.value
+                              .split(',')
+                              .map((s) => s.trim())
+                              .filter(Boolean),
+                          })
+                        }
+                        placeholder="Post-op intraoral photograph file reference or notes..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:outline-none focus:border-indigo-600 font-sans"
+                      />
+                    </div>
+
+                    {/* CONFIRMATION SUMMARY CARD */}
+                    <div className="col-span-12 bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+                      <span className="font-bold text-slate-800 text-xs block mb-1">Session Summary Checklist:</span>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                        <div className="bg-white p-2 rounded border border-slate-200">
+                          <span className="text-slate-400 block font-semibold">Session</span>
+                          <span className="font-bold text-indigo-900">#{sessionForm.sessionNo}</span>
+                        </div>
+                        <div className="bg-white p-2 rounded border border-slate-200">
+                          <span className="text-slate-400 block font-semibold">Date</span>
+                          <span className="font-bold text-slate-800">{sessionForm.date}</span>
+                        </div>
+                        <div className="bg-white p-2 rounded border border-slate-200">
+                          <span className="text-slate-400 block font-semibold">Status</span>
+                          <span className="font-bold text-emerald-700">{sessionForm.status}</span>
+                        </div>
+                        <div className="bg-white p-2 rounded border border-slate-200">
+                          <span className="text-slate-400 block font-semibold">Teeth</span>
+                          <span className="font-bold text-blue-900">
+                            {sessionForm.teeth.length > 0 ? sessionForm.teeth.map((t) => `#${t}`).join(', ') : 'None'}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-200">
+                        সেশনটি সেভ করলে এটি স্বয়ংক্রিয়ভাবে রোগীর টাইমলাইনে ক্রমানুসারে যুক্ত হবে এবং ডাটাবেজে স্থায়ীভাবে সংরক্ষিত থাকবে।
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* MODAL FOOTER BUTTONS */}
+            <div className="p-3 bg-slate-100 border-t border-slate-200 flex justify-between items-center">
+              <div>
+                {sessionStep > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setSessionStep(sessionStep - 1)}
+                    className="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold rounded-lg text-xs flex items-center space-x-1 transition-colors"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    <span>Previous</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddSessionModal(false)}
+                  className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-lg text-xs transition-colors"
+                >
+                  Cancel
+                </button>
+
+                {sessionStep < 7 ? (
+                  <button
+                    type="button"
+                    onClick={() => setSessionStep(sessionStep + 1)}
+                    className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition-colors shadow-xs"
+                  >
+                    <span>Next</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSaveTreatmentSession}
+                    className="px-5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold rounded-lg text-xs flex items-center space-x-1.5 transition-colors shadow-sm"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Save Treatment Session</span>
+                  </button>
+                )}
+
+                {sessionStep < 7 && (
+                  <button
+                    type="button"
+                    onClick={handleSaveTreatmentSession}
+                    className="px-3 py-1.5 bg-emerald-600/90 hover:bg-emerald-600 text-white font-semibold rounded-lg text-xs transition-colors"
+                    title="Save now without going through remaining steps"
+                  >
+                    Save Now
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* PATIENT INFORMATION MODAL */}
       {showPatientInfoModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -2518,33 +5338,45 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
             <div className="p-3 max-h-96 overflow-y-auto divide-y divide-slate-100 text-xs">
               {allTemplates
                 .filter((t) => {
-                  if (templateModalType === 'cost') return t.type === 'cost';
-                  if (templateModalType === 'advice') return t.type === 'advice';
-                  if (templateModalType === 'drug') return t.type === 'drug';
-                  if (templateModalType === 'treatment') return t.type === 'treatment';
+                  if (templateModalType === 'cost') return t.type === 'cost' || t.type === 'cost_auto';
+                  if (templateModalType === 'advice') return t.type === 'advice' || t.type === 'advice_auto';
+                  if (templateModalType === 'drug') return t.type === 'drug' || t.type === 'drug_auto';
+                  if (templateModalType === 'treatment') return t.type === 'treatment' || t.type === 'treatment_auto';
                   return true;
                 })
                 .map((tmpl) => (
                   <div
                     key={tmpl.id}
                     onClick={() => {
-                      if (templateModalType === 'advice' && tmpl.content) {
+                      if (templateModalType === 'advice' && (tmpl.content || tmpl.name)) {
                         const emptyIdx = adviceList.findIndex((a) => !a.trim());
+                        const text = tmpl.content || tmpl.name;
                         if (emptyIdx !== -1) {
                           const updated = [...adviceList];
-                          updated[emptyIdx] = tmpl.content!;
+                          updated[emptyIdx] = text;
                           setAdviceList(updated);
                         } else {
-                          setAdviceList((prev) => [...prev, tmpl.content!]);
+                          setAdviceList((prev) => [...prev, text]);
                         }
-                      } else if (templateModalType === 'cost' && tmpl.price) {
+                      } else if (templateModalType === 'cost') {
                         const emptyIdx = contractRows.findIndex((c) => !c.particulars.trim());
+                        const unitPrice = tmpl.price !== undefined && tmpl.price > 0 ? tmpl.price : 0;
                         if (emptyIdx !== -1) {
+                          const targetRow = contractRows[emptyIdx];
+                          const { price } = calculateContractRowPrice(targetRow, targetRow.quadrant, unitPrice);
                           const updated = [...contractRows];
-                          updated[emptyIdx] = { ...updated[emptyIdx], particulars: tmpl.name, price: tmpl.price };
+                          updated[emptyIdx] = {
+                            ...targetRow,
+                            particulars: tmpl.name,
+                            unitPrice,
+                            price,
+                          };
                           setContractRows(updated);
                         } else {
-                          setContractRows([...contractRows, { particulars: tmpl.name, quadrant: defaultQuadrant(), price: tmpl.price }]);
+                          setContractRows([
+                            ...contractRows,
+                            { particulars: tmpl.name, quadrant: defaultQuadrant(), price: unitPrice, unitPrice },
+                          ]);
                         }
                       }
                       setShowTemplateModal(false);
@@ -2567,7 +5399,306 @@ export function PrescriptionEditor({ initialRegNo, initialPrescriptionId, onSave
         </div>
       )}
 
-      {/* PRINT PREVIEW / PRINTABLE SHEET */}
+      {/* TOOTH SELECTION POPUP MODAL (1-8 with teeth.png, checkbox, & SL) */}
+      {toothModalData && (() => {
+        const parseTeethString = (str: string): number[] => {
+          if (!str) return [];
+          const found: number[] = [];
+          for (let i = 1; i <= 8; i++) {
+            if (new RegExp(`(^|[^0-9])${i}([^0-9]|$)`).test(str) || str.includes(i.toString())) {
+              found.push(i);
+            }
+          }
+          return found;
+        };
+
+        const activeQuadStr = toothModalData.workingQuadrant[toothModalData.activeQuad] || '';
+        const selectedTeeth = parseTeethString(activeQuadStr);
+
+        const toggleTooth = (num: number) => {
+          const nextSelected = selectedTeeth.includes(num)
+            ? selectedTeeth.filter((n) => n !== num)
+            : [...selectedTeeth, num].sort((a, b) => a - b);
+          const nextStr = nextSelected.join(', ');
+          setToothModalData({
+            ...toothModalData,
+            workingQuadrant: {
+              ...toothModalData.workingQuadrant,
+              [toothModalData.activeQuad]: nextStr,
+            },
+          });
+        };
+
+        const selectAll = () => {
+          setToothModalData({
+            ...toothModalData,
+            workingQuadrant: {
+              ...toothModalData.workingQuadrant,
+              [toothModalData.activeQuad]: '1, 2, 3, 4, 5, 6, 7, 8',
+            },
+          });
+        };
+
+        const clearCurrent = () => {
+          setToothModalData({
+            ...toothModalData,
+            workingQuadrant: {
+              ...toothModalData.workingQuadrant,
+              [toothModalData.activeQuad]: '',
+            },
+          });
+        };
+
+        const quadLabels: Record<'ur' | 'ul' | 'lr' | 'll', { title: string; subtitle: string }> = {
+          ur: { title: 'UR (Upper Right)', subtitle: 'উপরের ডান চোয়াল' },
+          ul: { title: 'UL (Upper Left)', subtitle: 'উপরের বাম চোয়াল' },
+          lr: { title: 'LR (Lower Right)', subtitle: 'নিচের ডান চোয়াল' },
+          ll: { title: 'LL (Lower Left)', subtitle: 'নিচের বাম চোয়াল' },
+        };
+
+        const toothNames = [
+          'Central Incisor',
+          'Lateral Incisor',
+          'Canine',
+          '1st Premolar',
+          '2nd Premolar',
+          '1st Molar',
+          '2nd Molar',
+          '3rd Molar (Wisdom)',
+        ];
+
+        return (
+          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[99999] flex items-center justify-center p-3 animate-in fade-in duration-150">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl overflow-hidden flex flex-col max-h-[92vh]">
+              {/* Modal Header */}
+              <div className="bg-gradient-to-r from-blue-900 via-sky-900 to-indigo-950 text-white px-5 py-3.5 flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center p-1 border border-white/20 shadow-inner">
+                    <img src="/teeth.png" alt="Teeth" className="w-7 h-7 object-contain drop-shadow" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base text-white flex items-center gap-2">
+                      দাঁত নির্বাচন (Tooth Selector - Palmer Notation)
+                      <span className="text-xs font-normal text-sky-200 bg-white/10 px-2 py-0.5 rounded-full border border-white/15">
+                        ১ থেকে ৮
+                      </span>
+                    </h3>
+                    <p className="text-xs text-sky-200">
+                      {toothModalData.sectionTitle ? `${toothModalData.sectionTitle} • ` : ''}
+                      বর্তমান সক্রিয় কোয়ারড্র্যান্ট:{' '}
+                      <span className="font-bold text-white underline decoration-sky-400">
+                        {quadLabels[toothModalData.activeQuad].title}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setToothModalData(null)}
+                  className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition"
+                  title="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Quadrant Selector Tabs */}
+              <div className="bg-slate-100/90 px-5 py-2.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider mr-1">Quadrant:</span>
+                  {(['ur', 'ul', 'lr', 'll'] as const).map((qKey) => {
+                    const isActive = toothModalData.activeQuad === qKey;
+                    const qVal = toothModalData.workingQuadrant[qKey];
+                    return (
+                      <button
+                        key={qKey}
+                        type="button"
+                        onClick={() => setToothModalData({ ...toothModalData, activeQuad: qKey })}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 border ${
+                          isActive
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="uppercase">{qKey}</span>
+                        {qVal ? (
+                          <span
+                            className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                              isActive ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'
+                            }`}
+                          >
+                            {qVal}
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Quick actions for active quadrant */}
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={selectAll}
+                    className="px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition"
+                  >
+                    সব সিলেক্ট করুন (1-8)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearCurrent}
+                    className="px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition"
+                  >
+                    ক্লিয়ার করুন
+                  </button>
+                </div>
+              </div>
+
+              {/* Active Quadrant Details Bar */}
+              <div className="px-5 py-2 bg-sky-50/70 border-b border-sky-100 flex items-center justify-between text-xs text-sky-900">
+                <div className="flex items-center space-x-2">
+                  <span className="font-bold">{quadLabels[toothModalData.activeQuad].title}</span>
+                  <span className="text-sky-700">({quadLabels[toothModalData.activeQuad].subtitle})</span>
+                </div>
+                <div>
+                  নির্বাচিত দাঁত:{' '}
+                  <span className="font-mono font-bold text-blue-900">
+                    {activeQuadStr || '(কোনো দাঁত নির্বাচিত নেই)'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Teeth 1 to 8 Cards Grid */}
+              <div className="p-5 overflow-y-auto flex-1 bg-slate-50/50">
+                <div className="grid grid-cols-4 sm:grid-cols-8 gap-3">
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((num) => {
+                    const isChecked = selectedTeeth.includes(num);
+                    return (
+                      <div
+                        key={num}
+                        onClick={() => toggleTooth(num)}
+                        className={`group cursor-pointer rounded-xl border-2 p-2 flex flex-col items-center justify-between transition-all select-none ${
+                          isChecked
+                            ? 'bg-blue-50/90 border-blue-600 shadow-md ring-2 ring-blue-400/30'
+                            : 'bg-white border-slate-200 hover:border-sky-300 hover:shadow-sm'
+                        }`}
+                      >
+                        {/* 1. TOP: Tooth Image teeth.png */}
+                        <div className="w-full flex items-center justify-center py-2 relative">
+                          <img
+                            src="/teeth.png"
+                            alt={`Tooth ${num}`}
+                            className={`w-14 h-14 sm:w-16 sm:h-16 object-contain transition-transform duration-200 group-hover:scale-105 drop-shadow-sm ${
+                              isChecked ? 'scale-105 drop-shadow' : 'opacity-85 group-hover:opacity-100'
+                            }`}
+                          />
+                        </div>
+
+                        {/* 2. MIDDLE: Checkbox */}
+                        <div className="py-1 flex items-center justify-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              toggleTooth(num);
+                            }}
+                            className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer accent-blue-600"
+                          />
+                        </div>
+
+                        {/* 3. BOTTOM: Serial Number (1 to 8) & Label */}
+                        <div className="w-full text-center pt-1 border-t border-slate-100 mt-1">
+                          <div
+                            className={`font-black text-base sm:text-lg leading-none ${
+                              isChecked ? 'text-blue-700' : 'text-slate-700'
+                            }`}
+                          >
+                            {num}
+                          </div>
+                          <div
+                            className="text-[9px] text-slate-500 font-medium truncate mt-0.5"
+                            title={toothNames[num - 1]}
+                          >
+                            {toothNames[num - 1]}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 4 Quadrants Summary Panel */}
+                <div className="mt-5 p-3.5 bg-white border border-slate-200 rounded-xl shadow-sm">
+                  <div className="text-xs font-bold text-slate-700 mb-2 flex items-center justify-between">
+                    <span>৪টি কোয়ারড্র্যান্টের সম্পূর্ণ চিত্র (Overview):</span>
+                    <span className="text-[11px] text-slate-500 font-normal">
+                      যেকোনো কোয়ারড্র্যান্টে ক্লিক করে সুইচ করুন
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    {(['ur', 'ul', 'lr', 'll'] as const).map((qKey) => (
+                      <div
+                        key={qKey}
+                        onClick={() => setToothModalData({ ...toothModalData, activeQuad: qKey })}
+                        className={`p-2 rounded-lg border cursor-pointer transition flex items-center justify-between ${
+                          toothModalData.activeQuad === qKey
+                            ? 'bg-blue-50 border-blue-400 font-bold text-blue-900 shadow-xs'
+                            : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span className="uppercase font-mono">{qKey}:</span>
+                        <span className="font-mono text-slate-800">
+                          {toothModalData.workingQuadrant[qKey] || (
+                            <span className="text-slate-400 font-normal">খালি</span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="bg-slate-100 px-5 py-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setToothModalData({
+                        ...toothModalData,
+                        workingQuadrant: { ur: '', ul: '', lr: '', ll: '' },
+                      });
+                    }}
+                    className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition"
+                  >
+                    সব কোয়ারড্র্যান্ট ক্লিয়ার
+                  </button>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setToothModalData(null)}
+                    className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition"
+                  >
+                    বাতিল (Cancel)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toothModalData.onSave(toothModalData.workingQuadrant);
+                      setToothModalData(null);
+                    }}
+                    className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs shadow-md shadow-blue-500/20 transition flex items-center space-x-1.5"
+                  >
+                    <span>সংরক্ষণ করুন (Save & Apply)</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {previewModalOpen && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] overflow-y-auto p-2 sm:p-4 flex flex-col items-center print-modal-overlay">
           <div className="w-full max-w-4xl bg-white rounded-xl shadow-2xl border border-slate-300 print-modal-container overflow-hidden my-auto">

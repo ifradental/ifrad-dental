@@ -134,6 +134,8 @@ export interface TemplateItem {
     | 'note_auto' 
     | 'plan_auto' 
     | 'drug_auto'
+    | 'drughistory'
+    | 'drughistory_auto'
     | (string & {});
   name: string;
   category?: string;
@@ -150,14 +152,20 @@ export interface Appointment {
   age: string;
   sex: string;
   mobile: string;
-  address: string;
+  address?: string;
+  problem?: string;
+  doctorId?: string;
+  doctorName?: string;
   date: string;
   time: string;
   paid: number;
-  status: 'Scheduled' | 'Waiting' | 'Completed' | 'Cancelled';
+  visitFee?: number;
+  reference?: string;
+  status: 'Scheduled' | 'Waiting' | 'In-Progress' | 'Completed' | 'Cancelled';
   serial: number;
   apntNo: string;
   createdAt: string;
+  prescriptionId?: string;
 }
 
 export interface PaymentRecord {
@@ -172,6 +180,62 @@ export interface PaymentRecord {
   payableAmount: number;
   paidAmount: number;
   dueAmount: number;
+  method?: string; // Cash, bKash, Nagad, Card, Bank Transfer, Other
+  note?: string;
+  addedBy?: string;
+  status?: string;
+  createdAt: string;
+}
+
+export interface TreatmentSession {
+  id: string;
+  regNo: number;
+  sessionNo: number;
+  date: string;
+  time?: string;
+  doctor?: string;
+  assistant?: string;
+  treatmentType: string;
+  teeth: string[];
+  status: 'Completed' | 'In Progress' | 'Scheduled' | 'Planned' | 'Cancelled' | 'Follow-up Required';
+  
+  // Before Treatment
+  beforeCondition?: string;
+  symptoms?: string;
+  diagnosis?: string;
+  toothCondition?: string;
+  painLevelBefore?: number;
+  clinicalFindings?: string;
+  xrayScanNote?: string;
+  beforePhotos?: string[];
+  beforeDoctorNotes?: string;
+
+  // Treatment Performed
+  procedureName?: string;
+  procedureDetails?: string;
+  materialsUsed?: string;
+  medicationUsed?: string;
+  duration?: string;
+  treatmentDoctorNotes?: string;
+
+  // After Treatment
+  afterCondition?: string;
+  painLevelAfter?: number;
+  treatmentResult?: string;
+  clinicalObservation?: string;
+  postInstructions?: string;
+  followUpRequired?: boolean;
+  afterPhotos?: string[];
+  afterDoctorNotes?: string;
+
+  // Next Treatment
+  nextDate?: string;
+  nextTreatment?: string;
+  nextTeeth?: string[];
+  nextPurpose?: string;
+  nextInstructions?: string;
+
+  attachments?: string[];
   createdAt: string;
 }
 
@@ -183,6 +247,30 @@ export interface ExpenseRecord {
   amount: number;
   note?: string;
   createdAt: string;
+}
+
+export type EmployeeRole = 'Doctor' | 'Receptionist' | 'Cashier' | 'Staff' | 'Admin';
+
+export interface Employee {
+  id: string;
+  name: string;
+  username?: string;
+  password?: string;
+  mobile: string;
+  email?: string;
+  role: EmployeeRole;
+  designation: string;
+  bmdcReg?: string;
+  specialization?: string;
+  salary?: number;
+  joiningDate: string;
+  address?: string;
+  nidOrPassport?: string;
+  status: 'Active' | 'Inactive';
+  avatar?: string;
+  note?: string;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface MaterialItem {
@@ -313,6 +401,8 @@ class DentalDatabase extends Dexie {
   materialUsages!: Table<MaterialUsage, string>;
   settings!: Table<ClinicSettings, string>;
   syncQueue!: Table<SyncQueueItem, string>;
+  treatmentSessions!: Table<TreatmentSession, string>;
+  employees!: Table<Employee, string>;
 
   constructor() {
     super('DentistProDB');
@@ -329,6 +419,18 @@ class DentalDatabase extends Dexie {
       materialUsages: 'id, materialId, date, patientRegNo',
       settings: 'id',
       syncQueue: 'id, collection, action, status, timestamp',
+    });
+    this.version(2).stores({
+      treatmentSessions: 'id, regNo, sessionNo, date, status, createdAt',
+    });
+    this.version(3).stores({
+      employees: 'id, name, mobile, role, status, joiningDate, createdAt',
+    });
+    this.version(4).stores({
+      employees: 'id, name, username, mobile, role, status, joiningDate, createdAt',
+    });
+    this.version(5).stores({
+      appointments: 'id, regNo, doctorId, date, status, serial, createdAt',
     });
   }
 }
@@ -592,8 +694,37 @@ export async function seedInitialDataIfNeeded() {
       { id: 'drug_auto_8', type: 'drug_auto', name: 'TAB. NAPA EXTRA 500mg+65mg', count: 58 },
       { id: 'drug_auto_9', type: 'drug_auto', name: 'ORODEX MOUTHWASH 0.2%', count: 45 },
       { id: 'drug_auto_10', type: 'drug_auto', name: 'D-GEL ORAL GEL', count: 35 },
+
+      // 17. Drug History Autosave
+      { id: 'dh_auto_1', type: 'drughistory_auto', name: 'Tab. Metformin 500mg (1+0+1)', count: 95 },
+      { id: 'dh_auto_2', type: 'drughistory_auto', name: 'Tab. Losartan 50mg (0+0+1)', count: 85 },
+      { id: 'dh_auto_3', type: 'drughistory_auto', name: 'Tab. Amlodipine 5mg (1+0+0)', count: 80 },
+      { id: 'dh_auto_4', type: 'drughistory_auto', name: 'Tab. Ecosprin 75mg (0+1+0)', count: 75 },
+      { id: 'dh_auto_5', type: 'drughistory_auto', name: 'Tab. Rosuvastatin 10mg (0+0+1)', count: 65 },
+      { id: 'dh_auto_6', type: 'drughistory_auto', name: 'Tab. Bisoprolol 2.5mg (1+0+0)', count: 50 },
+      { id: 'dh_auto_7', type: 'drughistory_auto', name: 'Inj. Insulin (Regular / Mixed)', count: 45 },
+      { id: 'dh_auto_8', type: 'drughistory_auto', name: 'Tab. Thyrox 50mcg (1+0+0)', count: 40 },
+      { id: 'dh_auto_9', type: 'drughistory_auto', name: 'Tab. Clopidogrel 75mg (0+1+0)', count: 35 },
+      { id: 'dh_auto_10', type: 'drughistory_auto', name: 'Inhaler Salbutamol / Seretide', count: 30 },
     ];
     await db.templates.bulkPut(defaultTemplates);
+  } else {
+    // Ensure drug history templates exist even in existing DB
+    const dhCount = await db.templates.where('type').equals('drughistory_auto').count();
+    if (dhCount === 0) {
+      await db.templates.bulkPut([
+        { id: 'dh_auto_1', type: 'drughistory_auto', name: 'Tab. Metformin 500mg (1+0+1)', count: 95 },
+        { id: 'dh_auto_2', type: 'drughistory_auto', name: 'Tab. Losartan 50mg (0+0+1)', count: 85 },
+        { id: 'dh_auto_3', type: 'drughistory_auto', name: 'Tab. Amlodipine 5mg (1+0+0)', count: 80 },
+        { id: 'dh_auto_4', type: 'drughistory_auto', name: 'Tab. Ecosprin 75mg (0+1+0)', count: 75 },
+        { id: 'dh_auto_5', type: 'drughistory_auto', name: 'Tab. Rosuvastatin 10mg (0+0+1)', count: 65 },
+        { id: 'dh_auto_6', type: 'drughistory_auto', name: 'Tab. Bisoprolol 2.5mg (1+0+0)', count: 50 },
+        { id: 'dh_auto_7', type: 'drughistory_auto', name: 'Inj. Insulin (Regular / Mixed)', count: 45 },
+        { id: 'dh_auto_8', type: 'drughistory_auto', name: 'Tab. Thyrox 50mcg (1+0+0)', count: 40 },
+        { id: 'dh_auto_9', type: 'drughistory_auto', name: 'Tab. Clopidogrel 75mg (0+1+0)', count: 35 },
+        { id: 'dh_auto_10', type: 'drughistory_auto', name: 'Inhaler Salbutamol / Seretide', count: 30 },
+      ]);
+    }
   }
 
   // Preload sample materials
@@ -707,6 +838,41 @@ export async function seedInitialDataIfNeeded() {
       paidAmount: 3000,
       dueAmount: 4500,
       createdAt: '2026-09-03T10:30:00.000Z'
+    });
+  }
+
+  // Remove any legacy demo employees so employee data is 100% dynamic
+  const demoIds = ['emp_1', 'emp_2', 'emp_3', 'emp_4'];
+  for (const id of demoIds) {
+    const existing = await db.employees.get(id);
+    if (
+      existing &&
+      (existing.name === 'ডা. নাহিদ হাসান' ||
+        existing.name === 'সাদিয়া আফরিন' ||
+        existing.name === 'তানভীর আহমেদ' ||
+        existing.name === 'রিনা আক্তার')
+    ) {
+      await db.employees.delete(id);
+    }
+  }
+
+  // Ensure master Admin exists in db.employees if no admin exists yet
+  const adminEmp = await db.employees.get('emp_admin');
+  const anyAdmin = await db.employees.where('role').equals('Admin').first();
+  if (!adminEmp && !anyAdmin) {
+    await db.employees.add({
+      id: 'emp_admin',
+      name: 'Clinic Administrator',
+      username: 'admin',
+      password: 'admin',
+      mobile: '01800000000',
+      email: 'admin@ifradental.com',
+      role: 'Admin',
+      designation: 'Clinic Administrator',
+      joiningDate: new Date().toISOString().split('T')[0],
+      status: 'Active',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     });
   }
 }

@@ -393,12 +393,16 @@ export function TopBar() {
             onClick={() => setShowProfileMenu(!showProfileMenu)}
             className="flex items-center space-x-2 p-1.5 hover:bg-slate-100 rounded-lg transition border border-transparent hover:border-slate-200"
           >
-            <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-700 to-sky-500 text-white font-bold flex items-center justify-center text-xs shadow-sm">
-              {user?.name ? user.name.charAt(0) : 'D'}
+            <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-700 to-sky-500 text-white font-bold flex items-center justify-center text-xs shadow-sm overflow-hidden">
+              {user?.avatar ? (
+                <img src={user.avatar} alt="Profile" className="w-full h-full object-cover" />
+              ) : (
+                user?.name ? user.name.charAt(0) : 'D'
+              )}
             </div>
             <div className="hidden sm:block text-left">
               <div className="text-xs font-bold text-slate-800 leading-none">
-                {user?.name || 'ডা. নাহিদ হাসান'}
+                {user?.name || (user?.role === 'admin' ? 'Clinic Administrator' : 'User')}
               </div>
               <div className="text-[10px] text-slate-500 mt-0.5 capitalize">
                 {user?.role || 'Doctor'}
@@ -410,7 +414,9 @@ export function TopBar() {
           {showProfileMenu && (
             <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden z-50 text-xs py-1.5 animate-in fade-in zoom-in-95 duration-100">
               <div className="px-3.5 py-2.5 border-b border-slate-100">
-                <div className="font-bold text-slate-900">{user?.name || 'ডা. নাহিদ হাসান'}</div>
+                <div className="font-bold text-slate-900">
+                  {user?.name || (user?.role === 'admin' ? 'Clinic Administrator' : 'User')}
+                </div>
                 <div className="text-[11px] text-slate-500 font-mono">Role: {user?.role || 'Doctor'}</div>
                 <div className="mt-1 flex items-center space-x-1 text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded w-fit">
                   <ShieldCheck className="w-3 h-3" />
@@ -419,6 +425,15 @@ export function TopBar() {
               </div>
 
               <div className="py-1">
+                <Link
+                  href="/settings"
+                  onClick={() => setShowProfileMenu(false)}
+                  className="flex items-center space-x-2 px-3.5 py-2 hover:bg-slate-50 text-slate-700 font-medium transition"
+                >
+                  <User className="w-3.5 h-3.5 text-blue-600" />
+                  <span>My Profile & Settings</span>
+                </Link>
+
                 <Link
                   href="/header-edit"
                   onClick={() => setShowProfileMenu(false)}
@@ -429,7 +444,7 @@ export function TopBar() {
                 </Link>
 
                 <Link
-                  href="/setup"
+                  href="/settings"
                   onClick={() => setShowProfileMenu(false)}
                   className="flex items-center space-x-2 px-3.5 py-2 hover:bg-slate-50 text-slate-700 font-medium transition"
                 >

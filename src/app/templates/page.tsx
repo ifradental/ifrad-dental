@@ -43,7 +43,8 @@ type CategoryKey =
   | 'advice_auto' 
   | 'note_auto' 
   | 'plan_auto' 
-  | 'drug_auto';
+  | 'drug_auto'
+  | 'drughistory_auto';
 
 interface CategoryMeta {
   key: CategoryKey;
@@ -75,6 +76,7 @@ const CATEGORIES: CategoryMeta[] = [
   { key: 'note_auto', label: 'Note Autosave', icon: <FileText className="w-3.5 h-3.5" />, col: 3, description: 'Doctor special note auto-complete frequencies' },
   { key: 'plan_auto', label: 'Plan Autosave', icon: <ListChecks className="w-3.5 h-3.5" />, col: 3, description: 'Treatment plan auto-complete frequencies' },
   { key: 'drug_auto', label: 'Drug Autosave', icon: <Pill className="w-3.5 h-3.5" />, col: 3, description: 'Frequent drug prescription frequencies' },
+  { key: 'drughistory_auto', label: 'Drug History Autosave', icon: <Pill className="w-3.5 h-3.5" />, col: 3, description: 'Patient previous medication & drug history auto-complete frequencies' },
 ];
 
 export default function TemplatesPage() {
