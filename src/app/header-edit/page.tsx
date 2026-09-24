@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Heading1, Save, Upload, Eye, Image as ImageIcon, Sparkles, Trash2, CheckCircle2 } from 'lucide-react';
+import { Heading1, Save, Upload, Eye, Image as ImageIcon, Sparkles, Trash2, CheckCircle2, Cloud, RefreshCw } from 'lucide-react';
 import { db, type ClinicSettings } from '@/lib/db';
-import { syncEngine } from '@/lib/syncEngine';
+import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 
 export default function HeaderEditPage() {
   const [clinicName, setClinicName] = useState<string>('ইফরা ডেন্টাল এন্ড ফিজিওথেরাপি সেন্টার');
@@ -44,11 +44,30 @@ export default function HeaderEditPage() {
   const [watermarkCustomUrl, setWatermarkCustomUrl] = useState<string>('');
   const [watermarkOpacity, setWatermarkOpacity] = useState<number>(0.07);
 
+  // Live Sync State
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
+  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [mongoConnected, setMongoConnected] = useState<boolean>(false);
+  const [syncFeedback, setSyncFeedback] = useState<string>('');
+
   useEffect(() => {
     async function loadSettings() {
-      const s = await db.settings.get('default_settings');
+      let s = await db.settings.get('default_settings');
+      if (!s) {
+        try {
+          const res = await fetch('/api/settings');
+          const data = await res.json();
+          if (data.success && data.settings) {
+            s = data.settings;
+            await db.settings.put(s);
+          }
+        } catch (e) {
+          console.warn('Failed to load initial settings from MongoDB:', e);
+        }
+      }
       if (s) {
-        setClinicName(s.clinicName);
+        setClinicName(s.clinicName || 'ইফরা ডেন্টাল এন্ড ফিজিওথেরাপি সেন্টার');
         if (s.doctor1) setDoctor1(s.doctor1);
         if (s.doctor2) setDoctor2(s.doctor2);
         if (s.doctor3) setDoctor3(s.doctor3);
@@ -69,19 +88,56 @@ export default function HeaderEditPage() {
       }
     }
     loadSettings();
+
+    // Check MongoDB connectivity
+    fetch('/api/settings')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.settings) {
+          setMongoConnected(true);
+        }
+      })
+      .catch(() => {});
+
+    const unsub = syncEngine.subscribe((status, count) => {
+      setSyncStatus(status);
+      setPendingCount(count);
+    });
+
+    return () => unsub();
   }, []);
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 3 * 1024 * 1024) {
-      alert('ছবির সাইজ সর্বোচ্চ ৩ মেগাবাইট (3MB) হতে পারবে।');
+    if (file.size > 10 * 1024 * 1024) {
+      alert('ছবির সাইজ সর্বোচ্চ ১০ মেগাবাইট (10MB) হতে পারবে।');
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => {
-      setLogoUrl(reader.result as string);
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+      setLogoUrl(base64);
       setDisplayLogo(true);
+
+      // Upload to Cloudinary for optimized WebP delivery
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('folder', 'logos');
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.url) {
+            setLogoUrl(data.url);
+          }
+        }
+      } catch (err) {
+        console.warn('Cloudinary upload fallback to base64:', err);
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -89,13 +145,33 @@ export default function HeaderEditPage() {
   const handleWatermarkImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 3 * 1024 * 1024) {
-      alert('ছবির সাইজ সর্বোচ্চ ৩ মেগাবাইট (3MB) হতে পারবে।');
+    if (file.size > 10 * 1024 * 1024) {
+      alert('ছবির সাইজ সর্বোচ্চ ১০ মেগাবাইট (10MB) হতে পারবে।');
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => {
-      setWatermarkCustomUrl(reader.result as string);
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+      setWatermarkCustomUrl(base64);
+
+      // Upload to Cloudinary
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('folder', 'watermarks');
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.url) {
+            setWatermarkCustomUrl(data.url);
+          }
+        }
+      } catch (err) {
+        console.warn('Cloudinary watermark upload fallback:', err);
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -123,16 +199,67 @@ export default function HeaderEditPage() {
       },
     };
 
+    // 1. Save to local Dexie IndexedDB
     await db.settings.put(updatedSettings);
+
+    // 2. Queue in syncEngine for offline-first resilience
     await syncEngine.logMutation('settings', 'UPDATE', 'default_settings', updatedSettings);
-    alert('হেডার, লোগো এবং ওয়াটারমার্ক সেটিংস সফলভাবে আপডেট হয়েছে!');
+
+    // 3. Directly POST to MongoDB endpoint for immediate cloud persistence
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedSettings),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMongoConnected(true);
+        setSyncFeedback('✅ হেডার এবং ওয়াটারমার্ক সেটিংস MongoDB ডেটাবেজে সফলভাবে আপডেট হয়েছে!');
+      } else {
+        setSyncFeedback('⚠️ লোকাল ডেটাবেজে সেভ হয়েছে, ক্লাউড সিঙ্ক ব্যাকগ্রাউন্ডে চলছে...');
+      }
+    } catch (err) {
+      console.error('Direct MongoDB update error:', err);
+      setSyncFeedback('⚠️ লোকাল ডেটাবেজে সেভ হয়েছে, ক্লাউড সিঙ্ক ব্যাকগ্রাউন্ডে চলছে...');
+    }
+
+    // 4. Notify other open tabs & components (Sidebar, Dashboard, etc.)
+    window.dispatchEvent(new Event('storage'));
+
+    setTimeout(() => {
+      setSyncFeedback('');
+    }, 5000);
+  };
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    setSyncFeedback('');
+    try {
+      const res = await syncEngine.triggerSync();
+      if (res.success) {
+        setMongoConnected(true);
+        setSyncFeedback(
+          res.syncedCount > 0
+            ? `✅ সফলভাবে ক্লাউড সিঙ্ক সম্পন্ন হয়েছে (${res.syncedCount} items)`
+            : '✅ সকল ডেটা ইতিমধ্যে MongoDB ডেটাবেজে আপ-টু-ডেট আছে।'
+        );
+      } else {
+        setSyncFeedback(`⚠️ সিঙ্ক ওয়ার্নিং: ${res.message}`);
+      }
+    } catch {
+      setSyncFeedback('❌ ক্লাউড সিঙ্ক করতে সমস্যা হয়েছে। দয়া করে ইন্টারনেট ও ডেটাবেজ চেক করুন।');
+    } finally {
+      setIsSyncing(false);
+      setTimeout(() => setSyncFeedback(''), 5000);
+    }
   };
 
   return (
     <div className="p-3 max-w-[1550px] mx-auto text-slate-800">
       <div className="bg-white rounded-lg border border-slate-300 shadow-sm p-4">
         {/* Header Title & Save Button */}
-        <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-200">
+        <div className="flex flex-wrap items-center justify-between pb-3 mb-4 border-b border-slate-200 gap-3">
           <div className="flex items-center space-x-2">
             <Heading1 className="w-5 h-5 text-blue-600" />
             <div>
@@ -145,14 +272,60 @@ export default function HeaderEditPage() {
             </div>
           </div>
 
-          <button
-            onClick={handleSave}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold flex items-center space-x-1.5 shadow transition"
-          >
-            <Save className="w-4 h-4" />
-            <span>Save Header & Watermark</span>
-          </button>
+          <div className="flex items-center space-x-2">
+            {/* MongoDB Sync Status Badge */}
+            <div className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium border ${
+              mongoConnected
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-amber-50 text-amber-700 border-amber-200'
+            }`}>
+              <Cloud className={`w-3.5 h-3.5 ${mongoConnected ? 'text-emerald-600' : 'text-amber-500'}`} />
+              <span>{mongoConnected ? 'MongoDB Synced' : 'Checking Cloud...'}</span>
+              {pendingCount > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 bg-amber-200 text-amber-900 rounded-full text-[10px]">
+                  {pendingCount} pending
+                </span>
+              )}
+            </div>
+
+            <button
+              onClick={handleManualSync}
+              disabled={isSyncing}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-medium flex items-center space-x-1.5 border border-slate-300 transition disabled:opacity-50"
+              title="Force sync changes with MongoDB"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>{isSyncing ? 'Syncing...' : 'Sync Cloud'}</span>
+            </button>
+
+            <button
+              onClick={handleSave}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold flex items-center space-x-1.5 shadow transition"
+            >
+              <Save className="w-4 h-4" />
+              <span>Save Header & Watermark</span>
+            </button>
+          </div>
         </div>
+
+        {/* Feedback notification banner */}
+        {syncFeedback && (
+          <div className={`mb-4 p-3 rounded-md text-xs font-medium flex items-center justify-between border ${
+            syncFeedback.startsWith('✅')
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : syncFeedback.startsWith('⚠️')
+              ? 'bg-amber-50 text-amber-800 border-amber-200'
+              : 'bg-rose-50 text-rose-800 border-rose-200'
+          }`}>
+            <span>{syncFeedback}</span>
+            <button
+              onClick={() => setSyncFeedback('')}
+              className="text-slate-400 hover:text-slate-600 text-xs ml-4"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Live Preview with Header & Watermark */}
         <div className="mb-6">

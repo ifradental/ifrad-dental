@@ -543,13 +543,13 @@ function DoctorDashboard({
         </Link>
 
         <Link
-          href="/prescriptions"
+          href="/patients"
           className="p-3 bg-white hover:bg-sky-50 border border-slate-200 rounded-xl shadow-sm flex flex-col items-center text-center space-y-1.5 transition group"
         >
           <div className="p-2.5 bg-sky-600 text-white rounded-lg shadow-sm group-hover:scale-105 transition">
             <FileText className="w-5 h-5" />
           </div>
-          <span className="text-slate-800">প্রেসক্রিপশন EMR হিস্ট্রি</span>
+          <span className="text-slate-800">রোগী ও প্রেসক্রিপশন হিস্ট্রি</span>
         </Link>
 
         <Link
@@ -668,7 +668,7 @@ function DoctorDashboard({
                         {apnt.status === 'Completed' ? (
                           <div className="flex items-center space-x-1">
                             <Link
-                              href={`/prescriptions?regNo=${apnt.regNo || ''}`}
+                              href={`/patients?regNo=${apnt.regNo || ''}`}
                               className="px-2 py-1 rounded-lg text-[11px] font-bold transition flex items-center space-x-1 bg-sky-100 hover:bg-sky-200 text-sky-800 border border-sky-300 shadow-xs"
                               title="প্রেসক্রিপশন দেখুন"
                             >
@@ -741,8 +741,8 @@ function DoctorDashboard({
                 প্রেসক্রিপশন ও রোগী রেকর্ড ({filteredPrescriptions.length} টি)
               </h2>
             </div>
-            <Link href="/prescriptions" className="text-xs text-blue-600 hover:underline font-semibold">
-              সকল প্রেসক্রিপশন দেখুন →
+            <Link href="/patients" className="text-xs text-blue-600 hover:underline font-semibold">
+              সকল রোগী ও প্রেসক্রিপশন দেখুন →
             </Link>
           </div>
 
@@ -774,7 +774,7 @@ function DoctorDashboard({
                       </td>
                       <td className="p-2 text-center">
                         <Link
-                          href="/prescriptions"
+                          href={`/patients?regNo=${rx.regNo}`}
                           className="inline-flex items-center space-x-1 px-2 py-0.5 bg-sky-100 hover:bg-sky-200 text-sky-800 rounded font-semibold text-[11px]"
                         >
                           <Printer className="w-3 h-3" />
@@ -1005,7 +1005,7 @@ function AdminDashboard({
               <FileText className="w-4 h-4 text-blue-600" />
               <h2 className="font-bold text-sm text-slate-900">সাম্প্রতিক প্রেসক্রিপশন ও চিকিৎসা কার্যক্রম</h2>
             </div>
-            <Link href="/prescriptions" className="text-xs text-blue-600 hover:underline font-semibold">
+            <Link href="/patients" className="text-xs text-blue-600 hover:underline font-semibold">
               সকল রেকর্ডস →
             </Link>
           </div>
@@ -1032,7 +1032,7 @@ function AdminDashboard({
                     </td>
                     <td className="p-2 text-center">
                       <Link
-                        href="/prescriptions"
+                        href={`/patients?regNo=${rx.regNo}`}
                         className="inline-flex items-center space-x-1 px-2 py-0.5 bg-sky-100 hover:bg-sky-200 text-sky-800 rounded font-semibold text-[11px]"
                       >
                         <Printer className="w-3 h-3" />
@@ -1220,7 +1220,7 @@ function ReceptionistDashboard({
             <span>নতুন সিরিয়াল এন্ট্রি করুন</span>
           </Link>
           <Link
-            href="/prescriptions"
+            href="/patients"
             className="px-3.5 py-2 bg-white/15 hover:bg-white/25 text-white font-semibold text-xs rounded-lg border border-white/20 transition flex items-center space-x-1.5"
           >
             <FileText className="w-4 h-4" />
@@ -1622,11 +1622,11 @@ function CashierDashboard({
             <span>নতুন পেমেন্ট এন্ট্রি</span>
           </Link>
           <Link
-            href="/prescriptions"
+            href="/patients"
             className="px-3.5 py-2 bg-white/15 hover:bg-white/25 text-white font-semibold text-xs rounded-lg border border-white/20 transition flex items-center space-x-1.5"
           >
             <FileText className="w-4 h-4" />
-            <span>প্রেসক্রিপশন ও বিল তালিকা</span>
+            <span>রোগী ও বিল তালিকা</span>
           </Link>
         </div>
       </div>

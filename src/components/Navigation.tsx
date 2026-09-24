@@ -34,8 +34,8 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
+  { name: 'Patient Management', href: '/patients', icon: <UserCheck className="w-4 h-4" /> },
   { name: 'Prescription', href: '/', icon: <FileText className="w-4 h-4" /> },
-  { name: 'View All Prescription', href: '/prescriptions', icon: <Files className="w-4 h-4" /> },
   { name: 'Drug DB', href: '/drugs', icon: <Pill className="w-4 h-4" /> },
   { name: 'Template', href: '/templates', icon: <LayoutTemplate className="w-4 h-4" /> },
   { name: 'Appointment', href: '/appointments', icon: <Calendar className="w-4 h-4" /> },

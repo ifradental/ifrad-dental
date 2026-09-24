@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { db, seedInitialDataIfNeeded, type Employee } from '@/lib/db';
+import { syncEngine } from '@/lib/syncEngine';
 
 export interface User {
   username: string;
@@ -132,6 +133,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         updatedAt: new Date().toISOString(),
       };
       await db.employees.put(initialAdmin);
+      await syncEngine.logMutation('employees', 'INSERT', initialAdmin.id, initialAdmin);
+      syncEngine.triggerSync().catch(console.warn);
 
       const loggedUser: User = {
         username: 'admin',

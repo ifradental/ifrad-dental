@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
+import { db } from '@/lib/db';
 
 interface NavItem {
   name: string;
@@ -41,8 +42,8 @@ interface NavItem {
 
 const allNavItems: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
-  { name: 'Prescription', href: '/prescription', icon: <FileText className="w-4 h-4" />, allowedRoles: ['admin'] },
-  { name: 'View All Prescription', href: '/prescriptions', icon: <Files className="w-4 h-4" />, allowedRoles: ['admin', 'receptionist'] },
+  { name: 'Patient Management', href: '/patients', icon: <UserCheck className="w-4 h-4" />, allowedRoles: ['admin', 'receptionist'] },
+  { name: 'Prescription', href: '/prescription', icon: <FileText className="w-4 h-4" />, allowedRoles: ['admin', 'doctor', 'cashier'] },
   { name: 'Drug DB', href: '/drugs', icon: <Pill className="w-4 h-4" />, allowedRoles: ['admin'] },
   { name: 'Template', href: '/templates', icon: <LayoutTemplate className="w-4 h-4" />, allowedRoles: ['admin'] },
   { name: 'Appointment', href: '/appointments', icon: <Calendar className="w-4 h-4" /> },
@@ -63,12 +64,33 @@ export function Sidebar() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<string>('');
+  const [clinicLogo, setClinicLogo] = useState<string>('');
+  const [clinicName, setClinicName] = useState<string>('Dentist PRO 7.0');
+
+  const loadBranding = async () => {
+    try {
+      const s = await db.settings.get('default_settings');
+      if (s) {
+        if (s.logoUrl) setClinicLogo(s.logoUrl);
+        if (s.clinicName) setClinicName(s.clinicName);
+      }
+    } catch (e) {
+      console.warn('Failed to load branding in sidebar:', e);
+    }
+  };
 
   useEffect(() => {
+    loadBranding();
+
     const unsubscribe = syncEngine.subscribe((status, count) => {
       setSyncStatus(status);
       setPendingCount(count);
+      loadBranding();
     });
+
+    const handleRefresh = () => loadBranding();
+    window.addEventListener('focus', handleRefresh);
+    window.addEventListener('storage', handleRefresh);
 
     const timer = setInterval(() => {
       const now = new Date();
@@ -77,6 +99,8 @@ export function Sidebar() {
 
     return () => {
       unsubscribe();
+      window.removeEventListener('focus', handleRefresh);
+      window.removeEventListener('storage', handleRefresh);
       clearInterval(timer);
     };
   }, []);
@@ -85,9 +109,14 @@ export function Sidebar() {
 
   const filteredNavItems = useMemo(() => {
     return allNavItems.filter((item) => {
-      // Doctor user strictly sees only Dashboard, Appointment, and Settings
+      // Doctor user sees Dashboard, Appointment, Prescription, and Settings
       if (userRole === 'doctor') {
-        return item.href === '/dashboard' || item.href === '/appointments' || item.href === '/settings';
+        return (
+          item.href === '/dashboard' ||
+          item.href === '/appointments' ||
+          item.href === '/prescription' ||
+          item.href === '/settings'
+        );
       }
 
       if (userRole === 'admin' || userRole === 'super_admin' || userRole === 'superadmin') {
@@ -134,20 +163,33 @@ export function Sidebar() {
       <div>
         <div className="p-3.5 border-b border-sky-800/30 flex items-center justify-between">
           <div className="flex items-center space-x-2.5 overflow-hidden">
-            <div className="w-9 h-9 bg-gradient-to-tr from-sky-400 to-blue-600 rounded-xl flex items-center justify-center text-xl shadow-md flex-shrink-0 border border-sky-300/40">
-              🦷
+            <div className="w-9 h-9 bg-white rounded-xl flex items-center justify-center p-1 shadow-md flex-shrink-0 border border-sky-300/40 overflow-hidden">
+              {clinicLogo ? (
+                <img
+                  src={clinicLogo}
+                  alt={clinicName}
+                  className="w-full h-full object-contain rounded-lg"
+                />
+              ) : (
+                <div className="w-full h-full bg-gradient-to-tr from-sky-400 to-blue-600 rounded-lg flex items-center justify-center text-lg">
+                  🦷
+                </div>
+              )}
             </div>
             {!isCollapsed && (
               <div className="flex flex-col min-w-0">
                 <div className="flex items-center space-x-1.5">
-                  <span className="font-extrabold text-sm tracking-wide text-white font-sans">
-                    Dentist <span className="text-sky-400">PRO</span>
+                  <span
+                    className="font-extrabold text-xs tracking-tight text-white font-sans truncate max-w-[130px]"
+                    title={clinicName}
+                  >
+                    {clinicName}
                   </span>
-                  <span className="bg-yellow-400 text-slate-950 text-[9px] font-black px-1.5 py-0.2 rounded">
-                    7.0
+                  <span className="bg-yellow-400 text-slate-950 text-[8px] font-black px-1 py-0.2 rounded shrink-0">
+                    PRO
                   </span>
                 </div>
-                <span className="text-[10px] text-sky-200/70 truncate">Desktop Edition</span>
+                <span className="text-[10px] text-sky-200/70 truncate">Dental Management</span>
               </div>
             )}
           </div>

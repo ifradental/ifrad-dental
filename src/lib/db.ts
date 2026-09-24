@@ -88,6 +88,12 @@ export interface Prescription {
   payment?: PaymentEntry;
   // Auxiliary
   otNotes?: OTNotes;
+  // Doctor & Cashier Workflow
+  doctorName?: string;
+  workflowStatus?: 'doctor_draft' | 'sent_to_cashier' | 'cashier_paid' | 'sent_to_doctor' | 'completed';
+  sentToCashierAt?: string;
+  sentToDoctorAt?: string;
+  cashierName?: string;
   createdAt: string;
   updatedAt: string;
   synced?: boolean;
@@ -161,7 +167,7 @@ export interface Appointment {
   paid: number;
   visitFee?: number;
   reference?: string;
-  status: 'Scheduled' | 'Waiting' | 'In-Progress' | 'Completed' | 'Cancelled';
+  status: 'Scheduled' | 'Waiting' | 'In-Progress' | 'Completed' | 'Cancelled' | 'Sent to Cashier' | 'Payment Done' | string;
   serial: number;
   apntNo: string;
   createdAt: string;
@@ -857,10 +863,10 @@ export async function seedInitialDataIfNeeded() {
   }
 
   // Ensure master Admin exists in db.employees if no admin exists yet
-  const adminEmp = await db.employees.get('emp_admin');
+  let adminEmp = await db.employees.get('emp_admin');
   const anyAdmin = await db.employees.where('role').equals('Admin').first();
   if (!adminEmp && !anyAdmin) {
-    await db.employees.add({
+    const defaultAdmin: Employee = {
       id: 'emp_admin',
       name: 'Clinic Administrator',
       username: 'admin',
@@ -873,7 +879,26 @@ export async function seedInitialDataIfNeeded() {
       status: 'Active',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
+    };
+    await db.employees.add(defaultAdmin);
+    adminEmp = defaultAdmin;
+  }
+
+  // Ensure Admin is queued in syncQueue to persist to MongoDB
+  const targetAdmin = adminEmp || anyAdmin;
+  if (targetAdmin) {
+    const existingQueue = await db.syncQueue.where('documentId').equals(targetAdmin.id).first();
+    if (!existingQueue) {
+      await db.syncQueue.put({
+        id: `sync_admin_${targetAdmin.id}`,
+        collection: 'employees',
+        action: 'UPDATE',
+        documentId: targetAdmin.id,
+        payload: targetAdmin,
+        timestamp: Date.now(),
+        status: 'PENDING',
+      });
+    }
   }
 }
 

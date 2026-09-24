@@ -21,10 +21,19 @@ import {
   Cloud, 
   RefreshCw,
   X,
-  FileText
+  FileText,
+  Database,
+  UploadCloud,
+  DownloadCloud,
+  AlertCircle,
+  Sparkles,
+  ExternalLink,
+  Copy,
+  Check
 } from 'lucide-react';
 import { db, type ClinicSettings, type Employee } from '@/lib/db';
 import { useAuth } from '@/context/AuthContext';
+import { syncEngine } from '@/lib/syncEngine';
 
 export default function SettingsPage() {
   const { user, updateUser } = useAuth();
@@ -49,6 +58,8 @@ export default function SettingsPage() {
 
   // 2. Clinic Settings State
   const [clinicName, setClinicName] = useState<string>('ইফরা ডেন্টাল এন্ড ফিজিওথেরাপি সেন্টার');
+  const [clinicLogo, setClinicLogo] = useState<string>('');
+  const [isUploadingLogo, setIsUploadingLogo] = useState<boolean>(false);
   const [footerText, setFooterText] = useState<string>('ধন্যবাদ, সুস্থ দাঁত সুন্দর হাসি। প্রয়োজনে যোগাযোগ করুন।');
   const [visitFee, setVisitFee] = useState<number>(500);
   const [revisitFee, setRevisitFee] = useState<number>(400);
@@ -67,12 +78,109 @@ export default function SettingsPage() {
   const [displaySignature, setDisplaySignature] = useState<boolean>(true);
 
   // Cloud Sync
-  const [cloudSyncUrl, setCloudSyncUrl] = useState<string>('http://localhost:5000/api/sync');
+  const [cloudSyncUrl, setCloudSyncUrl] = useState<string>('/api/sync');
   const [cloudSyncApiKey, setCloudSyncApiKey] = useState<string>('');
+  const [healthStatus, setHealthStatus] = useState<{
+    checking: boolean;
+    mongoConnected: boolean;
+    cloudinaryConfigured: boolean;
+    mongoMessage: string;
+    cloudinaryMessage: string;
+    databaseName?: string;
+  } | null>(null);
+  const [isSyncingNow, setIsSyncingNow] = useState<boolean>(false);
+  const [isPullingNow, setIsPullingNow] = useState<boolean>(false);
+  const [copiedVar, setCopiedVar] = useState<string | null>(null);
 
   useEffect(() => {
     loadSettings();
   }, [user]);
+
+  useEffect(() => {
+    if (activeTab === 'cloud') {
+      checkHealth();
+    }
+  }, [activeTab]);
+
+  const checkHealth = async () => {
+    setHealthStatus((prev) => ({
+      checking: true,
+      mongoConnected: prev?.mongoConnected ?? false,
+      cloudinaryConfigured: prev?.cloudinaryConfigured ?? false,
+      mongoMessage: 'সংযোগ পরীক্ষা করা হচ্ছে...',
+      cloudinaryMessage: 'যাচai করা হচ্ছে...',
+    }));
+    try {
+      const res = await fetch('/api/health');
+      if (res.ok) {
+        const data = await res.json();
+        setHealthStatus({
+          checking: false,
+          mongoConnected: !!data.mongo?.connected,
+          cloudinaryConfigured: !!data.cloudinary?.configured,
+          mongoMessage: data.mongo?.message || (data.mongo?.connected ? 'সংযুক্ত (Connected)' : 'সংযোগের অপেক্ষায়'),
+          cloudinaryMessage: data.cloudinary?.message || (data.cloudinary?.configured ? 'সক্রিয় (WebP Optimized)' : 'কনফিগার করা হয়নি'),
+          databaseName: data.mongo?.database,
+        });
+      } else {
+        setHealthStatus({
+          checking: false,
+          mongoConnected: false,
+          cloudinaryConfigured: false,
+          mongoMessage: `সার্ভার রিসপন্স ত্রুটি (${res.status})`,
+          cloudinaryMessage: 'সার্ভার অফলাইন',
+        });
+      }
+    } catch (err: any) {
+      setHealthStatus({
+        checking: false,
+        mongoConnected: false,
+        cloudinaryConfigured: false,
+        mongoMessage: 'সার্ভার এপিআই অফলাইন বা লোড হচ্ছে না',
+        cloudinaryMessage: 'অফলাইন',
+      });
+    }
+  };
+
+  const handleManualSync = async () => {
+    setIsSyncingNow(true);
+    try {
+      const res = await syncEngine.triggerSync();
+      showNotification(res.message);
+      checkHealth();
+    } catch (e: any) {
+      showNotification(`সিঙ্ক করতে সমস্যা হয়েছে: ${e.message}`);
+    } finally {
+      setIsSyncingNow(false);
+    }
+  };
+
+  const handleManualPull = async () => {
+    setIsPullingNow(true);
+    try {
+      const res = await syncEngine.pullUpdates();
+      if (res.success) {
+        showNotification(
+          res.pulledCount > 0
+            ? `ক্লাউড থেকে সফলভাবে ${res.pulledCount} টি রেকর্ড আপডেট হয়েছে!`
+            : 'ক্লাউডে কোনো নতুন পরিবর্তন নেই (সব ডাটা আপ-টু-ডেট)।'
+        );
+      } else {
+        showNotification('ক্লাউড থেকে ডাটা আনা সম্ভব হয়নি (সার্ভার অফলাইন বা কোনো রেকর্ড নেই)।');
+      }
+      checkHealth();
+    } catch (e: any) {
+      showNotification(`ডাটা রিসিভ করতে সমস্যা হয়েছে: ${e.message}`);
+    } finally {
+      setIsPullingNow(false);
+    }
+  };
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedVar(id);
+    setTimeout(() => setCopiedVar(null), 2000);
+  };
 
   const loadSettings = async () => {
     setIsLoading(true);
@@ -119,6 +227,7 @@ export default function SettingsPage() {
       const settings = await db.settings.get('default_settings');
       if (settings) {
         setClinicName(settings.clinicName || 'ইফরা ডেন্টাল এন্ড ফিজিওথেরাপি সেন্টার');
+        if (settings.logoUrl) setClinicLogo(settings.logoUrl);
         setFooterText(settings.footerText || '');
         setVisitFee(settings.visitFee ?? 500);
         setRevisitFee(settings.revisitFee ?? 400);
@@ -137,7 +246,11 @@ export default function SettingsPage() {
           setDisplaySignature(settings.printSettings.displaySignature ?? true);
         }
 
-        setCloudSyncUrl(settings.cloudSyncUrl || 'http://localhost:5000/api/sync');
+        const initialSyncUrl =
+          settings.cloudSyncUrl && !settings.cloudSyncUrl.includes('localhost:5000')
+            ? settings.cloudSyncUrl
+            : '/api/sync';
+        setCloudSyncUrl(initialSyncUrl);
         setCloudSyncApiKey(settings.cloudSyncApiKey || '');
       }
     } catch (err) {
@@ -230,6 +343,8 @@ export default function SettingsPage() {
       };
 
       await db.employees.put(employeeRecord);
+      await syncEngine.logMutation('employees', 'UPDATE', employeeRecord.id, employeeRecord);
+      syncEngine.triggerSync().catch(console.warn);
 
       // Update AuthContext session & localStorage
       const updatedFields: any = {
@@ -282,6 +397,44 @@ export default function SettingsPage() {
     }
   };
 
+  // Clinic Logo Upload (Cloudinary with base64 fallback)
+  const handleClinicLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('ছবির সাইজ সর্বোচ্চ ১০ মেগাবাইট (10MB) হতে পারবে।');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+      setClinicLogo(base64);
+
+      // Upload to Cloudinary for optimized WebP delivery
+      setIsUploadingLogo(true);
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('folder', 'logos');
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.url) {
+            setClinicLogo(data.url);
+          }
+        }
+      } catch (err) {
+        console.warn('Cloudinary upload fallback to base64:', err);
+      } finally {
+        setIsUploadingLogo(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Clinic & Print Settings Save
   const handleSaveClinicSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -292,6 +445,8 @@ export default function SettingsPage() {
         ...existing,
         id: 'default_settings',
         clinicName,
+        logoUrl: clinicLogo,
+        displayLogo: true,
         footerText,
         visitFee: Number(visitFee),
         revisitFee: Number(revisitFee),
@@ -314,7 +469,9 @@ export default function SettingsPage() {
       };
 
       await db.settings.put(updatedSettings);
-      showNotification('সেটিংস সফলভাবে সংরক্ষণ করা হয়েছে!');
+      await syncEngine.logMutation('settings', 'UPDATE', 'default_settings', updatedSettings);
+      syncEngine.triggerSync().catch(console.warn);
+      showNotification('ক্লিনিক সেটিংস ও লোগো সফলভাবে সংরক্ষণ করা হয়েছে!');
     } catch (err) {
       console.error('Failed to save clinic settings:', err);
       alert('সেটিংস সংরক্ষণ করতে সমস্যা হয়েছে!');
@@ -788,6 +945,47 @@ export default function SettingsPage() {
           </div>
 
           <div className="grid grid-cols-12 gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+            {/* Clinic Logo Upload Box */}
+            <div className="col-span-12 p-3 bg-white rounded-lg border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-16 h-16 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center overflow-hidden p-1 shrink-0">
+                  {clinicLogo ? (
+                    <img src={clinicLogo} alt="Clinic Logo" className="w-full h-full object-contain rounded" />
+                  ) : (
+                    <span className="text-2xl">🦷</span>
+                  )}
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-800 text-xs">ক্লিনিক লোগো (লগইন স্ক্রিন ও প্রেসক্রিপশন হেডার)</h4>
+                  <p className="text-[11px] text-slate-500">লগইন স্ক্রিনে এবং প্রেসক্রিপশনে আপনার এই ক্লিনিক লোগোটি স্বয়ংক্রিয়ভাবে প্রদর্শিত হবে</p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <label className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg font-bold border border-blue-200 cursor-pointer text-xs flex items-center space-x-1.5 transition">
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>{isUploadingLogo ? 'আপলোড হচ্ছে...' : 'লোগো আপলোড'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleClinicLogoUpload}
+                    className="hidden"
+                    disabled={isUploadingLogo}
+                  />
+                </label>
+                {clinicLogo && (
+                  <button
+                    type="button"
+                    onClick={() => setClinicLogo('')}
+                    className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg cursor-pointer"
+                    title="লোগো মুছে ফেলুন"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div className="col-span-12 sm:col-span-6">
               <label className="block text-slate-700 font-semibold mb-1">ক্লিনিক / সেন্টারের নাম</label>
               <input
@@ -861,48 +1059,281 @@ export default function SettingsPage() {
         </form>
       )}
 
-      {/* TAB 4: CLOUD SYNC CONFIGURATION */}
+      {/* TAB 4: CLOUD SYNC & MONGODB CONFIGURATION */}
       {activeTab === 'cloud' && (
-        <form onSubmit={handleSaveClinicSettings} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4 text-xs">
-          <div>
-            <h2 className="text-sm font-bold text-slate-900">ক্লাউড সিঙ্ক ও সার্ভার কনফিগারেশন</h2>
-            <p className="text-xs text-slate-500">অনলাইন সেন্ট্রাল সার্ভার বা MongoDB-তে ডাটা স্বয়ংক্রিয় ব্যাকআপের জন্য</p>
-          </div>
+        <div className="space-y-5 text-xs">
+          {/* Main Status & Header Card */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <div className="p-2 bg-blue-50 text-blue-700 rounded-lg">
+                    <Cloud className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">ক্লাউড ডেটাবেস ও ইমেজ অপ্টিমাইজেশন</h2>
+                    <p className="text-xs text-slate-500">
+                      MongoDB Atlas ক্লাউড স্টোরেজ ও Cloudinary WebP ইমেজ অপ্টিমাইজেশন
+                    </p>
+                  </div>
+                </div>
+              </div>
 
-          <div className="grid grid-cols-12 gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
-            <div className="col-span-12">
-              <label className="block text-slate-700 font-semibold mb-1">Cloud Sync API URL</label>
-              <input
-                type="url"
-                value={cloudSyncUrl}
-                onChange={(e) => setCloudSyncUrl(e.target.value)}
-                placeholder="http://yourserver.com/api/sync"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-mono"
-              />
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={checkHealth}
+                  disabled={healthStatus?.checking}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                  title="কানেকশন রিলোড করুন"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${healthStatus?.checking ? 'animate-spin text-blue-600' : ''}`} />
+                  <span>{healthStatus?.checking ? 'যাচাই হচ্ছে...' : 'স্ট্যাটাস রিফ্রেশ'}</span>
+                </button>
+              </div>
             </div>
 
-            <div className="col-span-12">
-              <label className="block text-slate-700 font-semibold mb-1">API Key / Token</label>
-              <input
-                type="password"
-                value={cloudSyncApiKey}
-                onChange={(e) => setCloudSyncApiKey(e.target.value)}
-                placeholder="সেন্ট্রাল সার্ভার সিক্রেট কি"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-mono"
-              />
+            {/* 2 Live Status Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Card 1: MongoDB Atlas */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <div className="p-2 bg-emerald-100 text-emerald-800 rounded-lg">
+                      <Database className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-xs">MongoDB Atlas ডেটাবেস</h3>
+                      <p className="text-[11px] text-slate-500">অনলাইন ডাটা স্টোরেজ ও সিঙ্ক</p>
+                    </div>
+                  </div>
+                  {healthStatus?.mongoConnected ? (
+                    <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-emerald-100 text-emerald-800 font-bold text-[11px] rounded-full border border-emerald-300">
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse"></span>
+                      <span>সংযুক্ত (Connected)</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-100 text-amber-800 font-bold text-[11px] rounded-full border border-amber-300">
+                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                      <span>{healthStatus?.checking ? 'যাচাই হচ্ছে...' : 'সংযোগের অপেক্ষায়'}</span>
+                    </span>
+                  )}
+                </div>
+
+                <div className="text-[11px] bg-white p-2.5 rounded-lg border border-slate-200 text-slate-600 space-y-1">
+                  <p className="font-semibold text-slate-800">
+                    স্ট্যাটাস: <span className={healthStatus?.mongoConnected ? 'text-emerald-700' : 'text-amber-700'}>{healthStatus?.mongoMessage || 'অফলাইন / লোকাল ক্যাশ সক্রিয়'}</span>
+                  </p>
+                  {healthStatus?.databaseName && (
+                    <p className="font-mono text-slate-500 text-[10px]">
+                      Database: <strong className="text-slate-700">{healthStatus.databaseName}</strong>
+                    </p>
+                  )}
+                  <p className="text-[10px] text-slate-500">
+                    রোগী, প্রেসক্রিপশন ও বিলিং-এর প্রতিটি পরিবর্তন স্বয়ংক্রিয়ভাবে ক্লাউডে ব্যাকআপ হয়।
+                  </p>
+                </div>
+
+                {/* MongoDB Action Buttons */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleManualSync}
+                    disabled={isSyncingNow}
+                    className="w-full py-2 px-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold flex items-center justify-center space-x-1 transition cursor-pointer disabled:opacity-50 text-[11px]"
+                  >
+                    <UploadCloud className={`w-3.5 h-3.5 ${isSyncingNow ? 'animate-bounce' : ''}`} />
+                    <span>{isSyncingNow ? 'সিঙ্ক হচ্ছে...' : 'ক্লাউডে সিঙ্ক (Push)'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleManualPull}
+                    disabled={isPullingNow}
+                    className="w-full py-2 px-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg font-bold flex items-center justify-center space-x-1 transition cursor-pointer disabled:opacity-50 text-[11px]"
+                  >
+                    <DownloadCloud className={`w-3.5 h-3.5 ${isPullingNow ? 'animate-spin' : ''}`} />
+                    <span>{isPullingNow ? 'ডাটা আসছে...' : 'ক্লাউড থেকে আনুন (Pull)'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Card 2: Cloudinary Image Optimization */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <div className="p-2 bg-purple-100 text-purple-800 rounded-lg">
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-xs">Cloudinary ইমেজ অপ্টিমাইজেশন</h3>
+                      <p className="text-[11px] text-slate-500">WebP ফরম্যাট ও হাই-স্পিড CDN</p>
+                    </div>
+                  </div>
+                  {healthStatus?.cloudinaryConfigured ? (
+                    <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-emerald-100 text-emerald-800 font-bold text-[11px] rounded-full border border-emerald-300">
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse"></span>
+                      <span>সক্রিয় (Active WebP)</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-100 text-amber-800 font-bold text-[11px] rounded-full border border-amber-300">
+                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                      <span>{healthStatus?.checking ? 'যাচাই হচ্ছে...' : 'কী প্রয়োজন'}</span>
+                    </span>
+                  )}
+                </div>
+
+                <div className="text-[11px] bg-white p-2.5 rounded-lg border border-slate-200 text-slate-600 space-y-1">
+                  <p className="font-semibold text-slate-800">
+                    স্ট্যাটাস: <span className={healthStatus?.cloudinaryConfigured ? 'text-emerald-700' : 'text-amber-700'}>{healthStatus?.cloudinaryMessage || 'ক্লাউড কী সেট করা হয়নি'}</span>
+                  </p>
+                  <p className="text-[10px] text-slate-500 leading-relaxed">
+                    লোগো, ওয়াটারমার্ক ও রোগীদের এক্স-রে ছবি স্বয়ংক্রিয়ভাবে সংকুচিত হয়ে WebP তে লোড হয়। Vercel Environment Variables এ সেট করার সাথে সাথে ক্লাউড ডেলিভারি সক্রিয় হয়।
+                  </p>
+                </div>
+
+                <div className="p-2 bg-purple-50 rounded-lg border border-purple-100 text-[10px] text-purple-900 flex items-center space-x-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                  <span>স্মার্ট অটো-কম্প্রেশন: মূল ছবির চেয়ে ৭০-৮০% কম সাইজে ফাস্ট লোড হবে।</span>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className="flex justify-end pt-2">
-            <button
-              type="submit"
-              className="px-6 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg font-bold shadow text-xs flex items-center space-x-1.5 cursor-pointer"
-            >
-              <Save className="w-4 h-4" />
-              <span>ক্লাউড কনফিগারেশন সংরক্ষণ করুন</span>
-            </button>
+          {/* Vercel Environment Variables Guide */}
+          <div className="bg-gradient-to-br from-slate-900 via-slate-850 to-slate-900 text-white rounded-xl p-5 shadow-sm space-y-3.5 border border-slate-800">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center space-x-2">
+                <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-mono text-[10px] font-bold border border-blue-500/30">
+                  Vercel Setup
+                </span>
+                <h3 className="font-bold text-xs text-white">Vercel-এ হোস্ট করার জন্য প্রয়োজনীয় Environment Variables</h3>
+              </div>
+              <span className="text-[11px] text-slate-400">Settings &gt; Environment Variables</span>
+            </div>
+
+            <p className="text-slate-300 text-[11px] leading-relaxed">
+              Vercel ড্যাশবোর্ডে গিয়ে আপনার প্রজেক্টের <strong>Settings &gt; Environment Variables</strong> ট্যাবে নিচের ৪টি ভেরিয়েবল যুক্ত করে সেভ করুন। এরপর Vercel স্বয়ংক্রিয়ভাবে সমস্ত ডাটা MongoDB Atlas-এ স্টোর করবে এবং ছবিগুলো Cloudinary CDN-এর মাধ্যমে পাঠাবে।
+            </p>
+
+            <div className="space-y-2 pt-1 font-mono text-[11px]">
+              {/* Var 1: MONGODB_URI */}
+              <div className="flex items-center justify-between bg-slate-800/80 p-2.5 rounded-lg border border-slate-700/60">
+                <div className="truncate mr-2">
+                  <span className="text-emerald-400 font-bold">MONGODB_URI</span>
+                  <span className="text-slate-400 text-[10px] block truncate">
+                    mongodb+srv://&lt;username&gt;:&lt;password&gt;@cluster0.xxxxx.mongodb.net/ifrad_dental?retryWrites=true&amp;w=majority
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard('MONGODB_URI', 'var1')}
+                  className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded text-[10px] flex items-center space-x-1 shrink-0 transition cursor-pointer"
+                >
+                  {copiedVar === 'var1' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedVar === 'var1' ? 'কপি হয়েছে' : 'নাম কপি'}</span>
+                </button>
+              </div>
+
+              {/* Var 2: CLOUDINARY_CLOUD_NAME */}
+              <div className="flex items-center justify-between bg-slate-800/80 p-2.5 rounded-lg border border-slate-700/60">
+                <div className="truncate mr-2">
+                  <span className="text-purple-400 font-bold">CLOUDINARY_CLOUD_NAME</span>
+                  <span className="text-slate-400 text-[10px] block truncate">
+                    আপনার Cloudinary ড্যাশবোর্ড থেকে ক্লাউড নেম (যেমন: dxyl8qop)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard('CLOUDINARY_CLOUD_NAME', 'var2')}
+                  className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded text-[10px] flex items-center space-x-1 shrink-0 transition cursor-pointer"
+                >
+                  {copiedVar === 'var2' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedVar === 'var2' ? 'কপি হয়েছে' : 'নাম কপি'}</span>
+                </button>
+              </div>
+
+              {/* Var 3: CLOUDINARY_API_KEY */}
+              <div className="flex items-center justify-between bg-slate-800/80 p-2.5 rounded-lg border border-slate-700/60">
+                <div className="truncate mr-2">
+                  <span className="text-purple-400 font-bold">CLOUDINARY_API_KEY</span>
+                  <span className="text-slate-400 text-[10px] block truncate">
+                    আপনার Cloudinary ড্যাশবোর্ড থেকে এপিআই কি (যেমন: 123456789012345)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard('CLOUDINARY_API_KEY', 'var3')}
+                  className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded text-[10px] flex items-center space-x-1 shrink-0 transition cursor-pointer"
+                >
+                  {copiedVar === 'var3' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedVar === 'var3' ? 'কপি হয়েছে' : 'নাম কপি'}</span>
+                </button>
+              </div>
+
+              {/* Var 4: CLOUDINARY_API_SECRET */}
+              <div className="flex items-center justify-between bg-slate-800/80 p-2.5 rounded-lg border border-slate-700/60">
+                <div className="truncate mr-2">
+                  <span className="text-purple-400 font-bold">CLOUDINARY_API_SECRET</span>
+                  <span className="text-slate-400 text-[10px] block truncate">
+                    আপনার Cloudinary ড্যাশবোর্ডের গোপন সিক্রেট কি
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard('CLOUDINARY_API_SECRET', 'var4')}
+                  className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-white rounded text-[10px] flex items-center space-x-1 shrink-0 transition cursor-pointer"
+                >
+                  {copiedVar === 'var4' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedVar === 'var4' ? 'কপি হয়েছে' : 'নাম কপি'}</span>
+                </button>
+              </div>
+            </div>
           </div>
-        </form>
+
+          {/* Advanced Sync URL form */}
+          <form onSubmit={handleSaveClinicSettings} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">কাস্টম সিঙ্ক ইউআরএল ও সিক্রেট কি</h2>
+              <p className="text-xs text-slate-500">Vercel বা লোকাল ডেভেলপমেন্টে ডিফল্ট /api/sync ব্যবহার করা হয়</p>
+            </div>
+
+            <div className="grid grid-cols-12 gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+              <div className="col-span-12 sm:col-span-6">
+                <label className="block text-slate-700 font-semibold mb-1">Cloud Sync API Route URL</label>
+                <input
+                  type="text"
+                  value={cloudSyncUrl}
+                  onChange={(e) => setCloudSyncUrl(e.target.value)}
+                  placeholder="/api/sync"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">ডিফল্ট: /api/sync (Vercel ও লোকাল উভয়েই অটো কাজ করে)</p>
+              </div>
+
+              <div className="col-span-12 sm:col-span-6">
+                <label className="block text-slate-700 font-semibold mb-1">API Key / Token</label>
+                <input
+                  type="password"
+                  value={cloudSyncApiKey}
+                  onChange={(e) => setCloudSyncApiKey(e.target.value)}
+                  placeholder="DENTIST_SECRET_KEY_2026"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">কাস্টম সার্ভার কানেকশন সিকিউরিটি কি</p>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="submit"
+                className="px-6 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg font-bold shadow text-xs flex items-center space-x-1.5 cursor-pointer"
+              >
+                <Save className="w-4 h-4" />
+                <span>কনফিগারেশন সংরক্ষণ করুন</span>
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   );

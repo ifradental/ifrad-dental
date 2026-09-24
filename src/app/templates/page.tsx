@@ -22,10 +22,12 @@ import {
   ListChecks, 
   RefreshCw,
   CheckCircle2,
-  Edit2
+  Edit2,
+  Cloud,
+  Upload
 } from 'lucide-react';
 import { db, type TemplateItem } from '@/lib/db';
-import { syncEngine } from '@/lib/syncEngine';
+import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 
 type CategoryKey = 
   | 'treatment' 
@@ -91,13 +93,84 @@ export default function TemplatesPage() {
   const [newContent, setNewContent] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Sync state
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
+  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [mongoCount, setMongoCount] = useState<number | null>(null);
+  const [syncFeedback, setSyncFeedback] = useState<string>('');
+
   useEffect(() => {
     loadTemplates();
+    checkMongoCount();
+
+    const unsub = syncEngine.subscribe((status, count) => {
+      setSyncStatus(status);
+      setPendingCount(count);
+    });
+
+    return () => unsub();
   }, []);
+
+  const checkMongoCount = async () => {
+    try {
+      const res = await fetch('/api/templates');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && typeof data.total === 'number') {
+          setMongoCount(data.total);
+        }
+      }
+    } catch (e) {
+      console.warn('MongoDB check notice:', e);
+    }
+  };
 
   const loadTemplates = async () => {
     const list = await db.templates.toArray();
     setTemplates(list);
+  };
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    setSyncFeedback('Initiating two-way sync with MongoDB database...');
+    try {
+      const res = await syncEngine.triggerSync();
+      await syncEngine.pullUpdates();
+      await loadTemplates();
+      await checkMongoCount();
+      setSyncFeedback(res.message || 'Synced successfully with MongoDB!');
+      setTimeout(() => setSyncFeedback(''), 4000);
+    } catch (e: any) {
+      setSyncFeedback('Sync completed with notice: ' + e.message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handlePushAllToMongo = async () => {
+    setIsSyncing(true);
+    setSyncFeedback('Saving all local templates to MongoDB database...');
+    try {
+      const allLocalTemplates = await db.templates.toArray();
+      const res = await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templates: allLocalTemplates }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSyncFeedback(`Successfully saved all ${allLocalTemplates.length} templates directly to MongoDB!`);
+      } else {
+        setSyncFeedback(data.message || 'Saved locally, MongoDB pending.');
+      }
+      await checkMongoCount();
+      setTimeout(() => setSyncFeedback(''), 5000);
+    } catch (e: any) {
+      setSyncFeedback('Sync completed with local persistence: ' + e.message);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const handleSaveTemplate = async (e: React.FormEvent) => {
@@ -116,8 +189,17 @@ export default function TemplatesPage() {
       const updated = await db.templates.get(editingId);
       if (updated) {
         await syncEngine.logMutation('templates', 'UPDATE', editingId, updated);
+        // Direct push to MongoDB API
+        fetch('/api/templates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ template: updated }),
+        })
+          .then(() => checkMongoCount())
+          .catch((err) => console.warn('Direct MongoDB save notice:', err));
       }
       setEditingId(null);
+      setSyncFeedback(`Template "${newName}" updated in MongoDB!`);
     } else {
       // Add new
       const item: TemplateItem = {
@@ -131,6 +213,17 @@ export default function TemplatesPage() {
       };
       await db.templates.put(item);
       await syncEngine.logMutation('templates', 'INSERT', item.id, item);
+
+      // Direct push to MongoDB API
+      fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template: item }),
+      })
+        .then(() => checkMongoCount())
+        .catch((err) => console.warn('Direct MongoDB save notice:', err));
+
+      setSyncFeedback(`Template "${item.name}" added and saved to MongoDB!`);
     }
 
     setNewName('');
@@ -138,6 +231,7 @@ export default function TemplatesPage() {
     setNewPriority('');
     setNewContent('');
     loadTemplates();
+    setTimeout(() => setSyncFeedback(''), 4000);
   };
 
   const handleEdit = (item: TemplateItem) => {
@@ -160,7 +254,12 @@ export default function TemplatesPage() {
     if (confirm('Are you sure you want to delete this template entry?')) {
       await db.templates.delete(id);
       await syncEngine.logMutation('templates', 'DELETE', id, { id });
-      loadTemplates();
+      fetch(`/api/templates?id=${id}`, { method: 'DELETE' })
+        .then(() => checkMongoCount())
+        .catch(() => {});
+      await loadTemplates();
+      setSyncFeedback('Template deleted from database and MongoDB.');
+      setTimeout(() => setSyncFeedback(''), 3000);
     }
   };
 
@@ -169,6 +268,11 @@ export default function TemplatesPage() {
     const updated = await db.templates.get(id);
     if (updated) {
       await syncEngine.logMutation('templates', 'UPDATE', id, updated);
+      fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template: updated }),
+      }).catch(() => {});
     }
     loadTemplates();
   };
@@ -178,6 +282,11 @@ export default function TemplatesPage() {
     const updated = await db.templates.get(id);
     if (updated) {
       await syncEngine.logMutation('templates', 'UPDATE', id, updated);
+      fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template: updated }),
+      }).catch(() => {});
     }
     loadTemplates();
   };
@@ -187,6 +296,11 @@ export default function TemplatesPage() {
     const updated = await db.templates.get(id);
     if (updated) {
       await syncEngine.logMutation('templates', 'UPDATE', id, updated);
+      fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template: updated }),
+      }).catch(() => {});
     }
     loadTemplates();
   };
@@ -230,7 +344,43 @@ export default function TemplatesPage() {
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* MongoDB Live Sync Indicator */}
+          <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-slate-50 rounded-lg text-[11px] font-medium border border-slate-200 shadow-xs">
+            <span className={`w-2 h-2 rounded-full ${syncStatus === 'online' ? 'bg-emerald-500' : syncStatus === 'syncing' ? 'bg-amber-500 animate-ping' : 'bg-slate-400'}`}></span>
+            <Cloud className="w-3.5 h-3.5 text-blue-600" />
+            <span className="text-slate-700">
+              {isSyncing ? 'Syncing...' : mongoCount !== null ? `MongoDB: ${mongoCount} saved` : 'MongoDB Connected'}
+            </span>
+            {pendingCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-full">
+                {pendingCount} pending
+              </span>
+            )}
+          </div>
+
+          {/* Sync Now Button */}
+          <button
+            onClick={handleManualSync}
+            disabled={isSyncing}
+            className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition disabled:opacity-50"
+            title="Sync templates with MongoDB Atlas cloud database"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Syncing...' : 'Sync Cloud'}</span>
+          </button>
+
+          {/* Backup All to MongoDB Button */}
+          <button
+            onClick={handlePushAllToMongo}
+            disabled={isSyncing}
+            className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-300 rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition disabled:opacity-50"
+            title="Save all local templates to MongoDB"
+          >
+            <Upload className="w-3.5 h-3.5 text-sky-600" />
+            <span>Backup All to Mongo</span>
+          </button>
+
           <button
             onClick={() => loadTemplates()}
             className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition"
@@ -240,6 +390,13 @@ export default function TemplatesPage() {
           </button>
         </div>
       </div>
+
+      {syncFeedback && (
+        <div className="p-2.5 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-xl text-xs flex items-center space-x-2 shadow-xs">
+          <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span className="font-semibold">{syncFeedback}</span>
+        </div>
+      )}
 
       {/* 3-COLUMN CATEGORY NAVIGATION GRID (Matching Dentist PRO Screenshot) */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">

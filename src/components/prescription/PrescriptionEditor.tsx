@@ -35,12 +35,15 @@ import {
   ShieldCheck,
   CreditCard,
   Layers,
-  ChevronLeft
+  ChevronLeft,
+  Send,
+  Lock
 } from 'lucide-react';
 import { db, type Patient, type Prescription, type Drug, type TemplateItem, type PaymentRecord, type TreatmentSession } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { convertEnglishToBanglaDigits, convertPhoneticToBangla } from '@/lib/banglaPhonetic';
 import { checkMedXDrugInteractions } from '@/lib/medxDrugs';
+import { useAuth } from '@/context/AuthContext';
 
 interface PrescriptionEditorProps {
   initialRegNo?: number;
@@ -91,6 +94,18 @@ export function PrescriptionEditor({
   initialAppointmentId,
   onSaved,
 }: PrescriptionEditorProps) {
+  // User & Role Context
+  const { user } = useAuth();
+  const userRole = (user?.role || '').toLowerCase();
+  const isAdmin = userRole === 'admin' || userRole === 'super_admin' || userRole === 'superadmin';
+  const isCashier = userRole === 'cashier';
+  const isDoctor = userRole === 'doctor';
+  const canManagePayment = isAdmin || isCashier;
+
+  // Workflow Status between Doctor and Cashier
+  const [workflowStatus, setWorkflowStatus] = useState<'doctor_draft' | 'sent_to_cashier' | 'cashier_paid' | 'sent_to_doctor' | 'completed'>('doctor_draft');
+  const [workflowNotice, setWorkflowNotice] = useState<string>('');
+
   // Patient Details
   const [regNo, setRegNo] = useState<number>(4201);
   const [patientName, setPatientName] = useState<string>('');
@@ -554,6 +569,7 @@ export function PrescriptionEditor({
         if (loadedRx.nextVisitDate) setNextVisitDate(loadedRx.nextVisitDate);
         if (loadedRx.revisitText) setRevisitOption(loadedRx.revisitText);
         if (loadedRx.timeSlot) setNextVisitTime(loadedRx.timeSlot);
+        if (loadedRx.workflowStatus) setWorkflowStatus(loadedRx.workflowStatus);
         await loadPatientFinancialsAndJourney(loadedRx.regNo);
       } else {
         if (initialRegNo) {
@@ -637,6 +653,10 @@ export function PrescriptionEditor({
 
   // Add Payment Transaction to Database immediately
   const handleAddPayment = async () => {
+    if (!canManagePayment) {
+      alert('পেমেন্ট এন্ট্রি করার অনুমতি শুধুমাত্র ক্যাশিয়ার এবং অ্যাডমিনের রয়েছে!');
+      return;
+    }
     const amount = Number(paidToday) || 0;
     if (amount <= 0) {
       alert('অনুগ্রহ করে জমা টাকার পরিমাণ (Paid Amount) লিখুন!');
@@ -661,7 +681,7 @@ export function PrescriptionEditor({
       dueAmount: newDue,
       method: paymentMethod || 'Cash',
       note: paymentNote.trim(),
-      addedBy: clinicSettings?.doctor1?.name ? clinicSettings.doctor1.name.split(' ')[0] : 'Admin',
+      addedBy: user?.name || (isCashier ? 'Cashier' : 'Admin'),
       status: 'Paid',
       createdAt: new Date().toISOString(),
     };
@@ -677,6 +697,10 @@ export function PrescriptionEditor({
 
   // Delete Payment Transaction
   const handleDeletePayment = async (paymentId: string) => {
+    if (!canManagePayment) {
+      alert('পেমেন্ট ডিলিট করার অনুমতি শুধুমাত্র ক্যাশিয়ার এবং অ্যাডমিনের রয়েছে!');
+      return;
+    }
     if (confirm('আপনি কি এই পেমেন্ট ট্রানজ্যাকশনটি মুছে ফেলতে চান?')) {
       await db.payments.delete(paymentId);
       await syncEngine.logMutation('payments', 'DELETE', paymentId, { id: paymentId });
@@ -1095,13 +1119,19 @@ export function PrescriptionEditor({
   };
 
   // Save Prescription (Offline + Auto-Sync)
-  const handleSave = async (andPrint: boolean = false, withoutHeader: boolean = false) => {
+  const handleSave = async (
+    andPrint: boolean = false,
+    withoutHeader: boolean = false,
+    statusOverride?: 'doctor_draft' | 'sent_to_cashier' | 'cashier_paid' | 'sent_to_doctor' | 'completed',
+    silent: boolean = false
+  ) => {
     if (!patientName.trim()) {
       alert('অনুগ্রহ করে রোগীর নাম লিখুন!');
       return;
     }
 
     const prescriptionId = initialPrescriptionId || `rx_${regNo}_${visitNo}_${Date.now()}`;
+    const effectiveStatus = statusOverride || workflowStatus || 'doctor_draft';
 
     // 1. Save or Update Patient Record in local DB
     const patientId = `p_${regNo}`;
@@ -1136,6 +1166,11 @@ export function PrescriptionEditor({
       occupation,
       date,
       visitNo,
+      doctorName: initialDoctorName || (isDoctor ? user?.name : clinicSettings?.doctor1?.name || 'ডা. নাহিদ হাসান'),
+      workflowStatus: effectiveStatus,
+      sentToCashierAt: effectiveStatus === 'sent_to_cashier' ? new Date().toISOString() : undefined,
+      sentToDoctorAt: (effectiveStatus === 'sent_to_doctor' || effectiveStatus === 'cashier_paid') ? new Date().toISOString() : undefined,
+      cashierName: isCashier ? user?.name : undefined,
       cc: ccList.filter((c) => c.trim() !== ''),
       ho,
       hoCustomText,
@@ -1190,7 +1225,7 @@ export function PrescriptionEditor({
     await syncEngine.logMutation('prescriptions', initialPrescriptionId ? 'UPDATE' : 'INSERT', prescriptionId, prescriptionData);
 
     // If payment made, record in Payments table
-    if (paidToday > 0) {
+    if (paidToday > 0 && canManagePayment) {
       const paymentRecord = {
         id: `pay_${Date.now()}`,
         regNo: Number(regNo),
@@ -1203,6 +1238,7 @@ export function PrescriptionEditor({
         payableAmount,
         paidAmount: paidToday,
         dueAmount: totalDue,
+        addedBy: user?.name || (isCashier ? 'Cashier' : 'Admin'),
         createdAt: new Date().toISOString(),
       };
       await db.payments.put(paymentRecord);
@@ -1238,7 +1274,6 @@ export function PrescriptionEditor({
       }
     };
 
-    // Auto-save C/C, DX, IX, Plan, Done, Note, Advice
     // Auto-save prescribed medicines with dose, instruction and duration into drug templates
     const autoSaveMedicinesToTemplates = async (medList: typeof medicines) => {
       const currentTemplates = await db.templates.toArray();
@@ -1300,13 +1335,19 @@ export function PrescriptionEditor({
     const refreshedTemplates = await db.templates.toArray();
     setAllTemplates(refreshedTemplates);
 
-    // If initiated from an appointment, mark appointment as Completed and link prescriptionId
+    // If initiated from an appointment, update appointment status and link prescriptionId
     if (initialAppointmentId) {
       try {
-        await db.appointments.update(initialAppointmentId, { status: 'Completed', prescriptionId });
-        await syncEngine.logMutation('appointments', 'UPDATE', initialAppointmentId, { status: 'Completed', prescriptionId });
+        let appointmentStatus: any = 'Completed';
+        if (effectiveStatus === 'sent_to_cashier') {
+          appointmentStatus = 'Sent to Cashier';
+        } else if (effectiveStatus === 'sent_to_doctor' || effectiveStatus === 'cashier_paid') {
+          appointmentStatus = 'Payment Done';
+        }
+        await db.appointments.update(initialAppointmentId, { status: appointmentStatus, prescriptionId });
+        await syncEngine.logMutation('appointments', 'UPDATE', initialAppointmentId, { status: appointmentStatus, prescriptionId });
       } catch (err) {
-        console.warn('Could not mark appointment completed:', err);
+        console.warn('Could not update appointment status:', err);
       }
     }
 
@@ -1320,9 +1361,42 @@ export function PrescriptionEditor({
       setTimeout(() => {
         window.print();
       }, 500);
-    } else {
-      alert(initialPrescriptionId ? 'প্রেসক্রিপশন সফলভাবে আপডেট করা হয়েছে!' : 'প্রেসক্রিপশন সফলভাবে অফলাইনে সেভ হয়েছে! ইন্টারনেট থাকলে লাইভ ডাটাবেজে অটো সিঙ্ক হবে।');
+    } else if (!silent) {
+      if (effectiveStatus === 'sent_to_cashier') {
+        setWorkflowNotice('✅ প্রেসক্রিপশনটি সফলভাবে ক্যাশিয়ারের কাছে বিল সংগ্রহের জন্য পাঠানো হয়েছে!');
+      } else if (effectiveStatus === 'sent_to_doctor') {
+        setWorkflowNotice('✅ বিল সংগ্রহ সম্পন্ন হয়েছে এবং প্রেসক্রিপশনটি ডাক্তারের কাছে ফেরত পাঠানো হয়েছে!');
+      } else {
+        alert(initialPrescriptionId ? 'প্রেসক্রিপশন সফলভাবে আপডেট করা হয়েছে!' : 'প্রেসক্রিপশন সফলভাবে অফলাইনে সেভ হয়েছে! ইন্টারনেট থাকলে লাইভ ডাটাবেজে অটো সিঙ্ক হবে।');
+      }
     }
+  };
+
+  // Doctor sends prescription to Cashier
+  const handleSendToCashier = async () => {
+    if (!patientName.trim()) {
+      alert('অনুগ্রহ করে রোগীর নাম লিখুন!');
+      return;
+    }
+    setWorkflowStatus('sent_to_cashier');
+    await handleSave(false, false, 'sent_to_cashier', true);
+    setWorkflowNotice('✅ প্রেসক্রিপশনটি সফলভাবে ক্যাশিয়ারের কাছে বিল সংগ্রহের জন্য পাঠানো হয়েছে!');
+    setTimeout(() => setWorkflowNotice(''), 6000);
+  };
+
+  // Cashier collects payment and sends back to Doctor
+  const handleSendBackToDoctor = async () => {
+    if (!patientName.trim()) {
+      alert('অনুগ্রহ করে রোগীর নাম লিখুন!');
+      return;
+    }
+    if (paidToday > 0 && canManagePayment) {
+      await handleAddPayment();
+    }
+    setWorkflowStatus('sent_to_doctor');
+    await handleSave(false, false, 'sent_to_doctor', true);
+    setWorkflowNotice('✅ পেমেন্ট সংগ্রহ করা হয়েছে এবং প্রেসক্রিপশনটি ডাক্তারের কাছে ফেরত পাঠানো হয়েছে!');
+    setTimeout(() => setWorkflowNotice(''), 6000);
   };
 
   const handleResetForm = async () => {
@@ -1776,7 +1850,57 @@ export function PrescriptionEditor({
           </div>
 
           {/* Action Buttons Matching Screenshot Toolbar */}
-          <div className="flex items-center space-x-1.5 text-xs">
+          <div className="flex flex-wrap items-center space-x-1.5 text-xs gap-y-1">
+            {/* Workflow Status Badge */}
+            <div
+              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                workflowStatus === 'sent_to_cashier'
+                  ? 'bg-amber-100 text-amber-800 border-amber-300'
+                  : workflowStatus === 'sent_to_doctor' || workflowStatus === 'cashier_paid'
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                  : 'bg-slate-100 text-slate-700 border-slate-300'
+              }`}
+            >
+              {workflowStatus === 'sent_to_cashier' ? (
+                <>
+                  <Clock className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Sent to Cashier (বিল সংগ্রহের অপেক্ষায়)</span>
+                </>
+              ) : workflowStatus === 'sent_to_doctor' || workflowStatus === 'cashier_paid' ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Returned from Cashier (পরিশোধিত)</span>
+                </>
+              ) : (
+                <>
+                  <FileText className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Doctor Draft</span>
+                </>
+              )}
+            </div>
+
+            {/* Doctor sends to Cashier */}
+            <button
+              onClick={handleSendToCashier}
+              className="flex items-center space-x-1 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded font-bold shadow transition"
+              title="প্রেসক্রিপশনটি সেভ করে ক্যাশিয়ারের কাছে পেমেন্ট সংগ্রহের জন্য পাঠান"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Send to Cashier</span>
+            </button>
+
+            {/* Cashier/Admin sends back to Doctor */}
+            {canManagePayment && (
+              <button
+                onClick={handleSendBackToDoctor}
+                className="flex items-center space-x-1 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded font-bold shadow transition"
+                title="পেমেন্ট সংগ্রহ শেষে প্রেসক্রিপশনটি ডাক্তারের কাছে পাঠান"
+              >
+                <ArrowRight className="w-3.5 h-3.5" />
+                <span>Send to Doctor</span>
+              </button>
+            )}
+
             <button
               onClick={() => {
                 setPrintMode('full');
@@ -1822,6 +1946,17 @@ export function PrescriptionEditor({
             </button>
           </div>
         </div>
+
+        {/* Workflow Notification Banner */}
+        {workflowNotice && (
+          <div className="mt-2 p-2 bg-emerald-50 border border-emerald-300 rounded text-emerald-800 text-xs font-semibold flex items-center justify-between shadow-xs">
+            <div className="flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>{workflowNotice}</span>
+            </div>
+            <button onClick={() => setWorkflowNotice('')} className="text-emerald-700 hover:text-emerald-950 font-bold px-1.5">✕</button>
+          </div>
+        )}
       </div>
 
       {/* MAIN TWO COLUMN LAYOUT */}
@@ -3371,6 +3506,13 @@ export function PrescriptionEditor({
 
             {/* PAYMENT INPUT FIELDS FORM */}
             <div className="bg-white p-2.5 rounded-lg border border-[#b8d5ed] shadow-xs mb-3">
+              {!canManagePayment && (
+                <div className="mb-2.5 p-2 bg-amber-50 border border-amber-300 rounded text-amber-900 text-[11px] font-medium flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                  <span>পেমেন্ট এন্ট্রি শুধুমাত্র ক্যাশিয়ার ও অ্যাডমিনের জন্য সংরক্ষিত। ডাক্তার শুধুমাত্র বিল ও হিসেব দেখতে পারবেন।</span>
+                </div>
+              )}
+
               <div className="text-[11px] font-bold text-blue-900 mb-2 flex items-center justify-between">
                 <span>নতুন পেমেন্ট যোগ করুন / Record Collection</span>
                 {totalDue === 0 && payableAmount > 0 && (
@@ -3388,10 +3530,14 @@ export function PrescriptionEditor({
                     <span className="absolute left-2 top-1.5 font-bold text-slate-400">৳</span>
                     <input
                       type="number"
+                      disabled={!canManagePayment}
+                      readOnly={!canManagePayment}
                       value={paidToday || ''}
                       onChange={(e) => setPaidToday(Number(e.target.value))}
                       placeholder="0"
-                      className="w-full pl-6 pr-2 py-1 border-2 border-blue-400 rounded bg-blue-50/30 text-right font-bold text-blue-950 text-sm focus:outline-none focus:border-blue-600 focus:bg-white"
+                      className={`w-full pl-6 pr-2 py-1 border-2 border-blue-400 rounded text-right font-bold text-blue-950 text-sm focus:outline-none focus:border-blue-600 ${
+                        !canManagePayment ? 'bg-slate-100 cursor-not-allowed text-slate-500' : 'bg-blue-50/30 focus:bg-white'
+                      }`}
                     />
                   </div>
                 </div>
@@ -3400,18 +3546,25 @@ export function PrescriptionEditor({
                   <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">তারিখ (Date)</label>
                   <input
                     type="date"
+                    disabled={!canManagePayment}
+                    readOnly={!canManagePayment}
                     value={paymentDate}
                     onChange={(e) => setPaymentDate(e.target.value)}
-                    className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-slate-50 font-medium focus:bg-white focus:outline-none focus:border-blue-500"
+                    className={`w-full px-2 py-1 border border-slate-300 rounded text-xs font-medium focus:outline-none focus:border-blue-500 ${
+                      !canManagePayment ? 'bg-slate-100 cursor-not-allowed text-slate-500' : 'bg-slate-50 focus:bg-white'
+                    }`}
                   />
                 </div>
 
                 <div className="col-span-6 sm:col-span-2">
                   <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">পেমেন্ট মেথড</label>
                   <select
+                    disabled={!canManagePayment}
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value)}
-                    className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-slate-50 font-medium focus:bg-white focus:outline-none focus:border-blue-500"
+                    className={`w-full px-2 py-1 border border-slate-300 rounded text-xs font-medium focus:outline-none focus:border-blue-500 ${
+                      !canManagePayment ? 'bg-slate-100 cursor-not-allowed text-slate-500' : 'bg-slate-50 focus:bg-white'
+                    }`}
                   >
                     <option value="Cash">Cash (নগদ)</option>
                     <option value="bKash">bKash (বিকাশ)</option>
@@ -3426,22 +3579,44 @@ export function PrescriptionEditor({
                   <label className="text-[10px] font-semibold text-slate-600 block mb-0.5">রেফারেন্স / নোট</label>
                   <input
                     type="text"
+                    disabled={!canManagePayment}
+                    readOnly={!canManagePayment}
                     value={paymentNote}
                     onChange={(e) => setPaymentNote(e.target.value)}
-                    placeholder="TrxID / Receipt / Note..."
-                    className="w-full px-2 py-1 border border-slate-300 rounded text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-blue-500"
+                    placeholder={canManagePayment ? "TrxID / Receipt / Note..." : "শুধুমাত্র ক্যাশিয়ার দ্বারা এন্ট্রিযোগ্য"}
+                    className={`w-full px-2 py-1 border border-slate-300 rounded text-xs focus:outline-none focus:border-blue-500 ${
+                      !canManagePayment ? 'bg-slate-100 cursor-not-allowed text-slate-500' : 'bg-slate-50 focus:bg-white'
+                    }`}
                   />
                 </div>
 
-                <div className="col-span-4 sm:col-span-2">
+                <div className="col-span-4 sm:col-span-2 flex flex-col gap-1">
                   <button
                     type="button"
+                    disabled={!canManagePayment}
                     onClick={handleAddPayment}
-                    className="w-full py-1.5 px-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-xs rounded shadow-xs transition-colors flex items-center justify-center space-x-1"
+                    title={!canManagePayment ? "শুধুমাত্র ক্যাশিয়ার ও অ্যাডমিন পেমেন্ট যোগ করতে পারবেন" : "পেমেন্ট যোগ করুন"}
+                    className={`w-full py-1.5 px-2 font-bold text-xs rounded shadow-xs transition-colors flex items-center justify-center space-x-1 ${
+                      canManagePayment
+                        ? 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white cursor-pointer'
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                    }`}
                   >
-                    <CreditCard className="w-3.5 h-3.5" />
-                    <span>Add Payment</span>
+                    {canManagePayment ? <CreditCard className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+                    <span>{canManagePayment ? 'Add Payment' : 'Locked'}</span>
                   </button>
+
+                  {canManagePayment && (
+                    <button
+                      type="button"
+                      onClick={handleSendBackToDoctor}
+                      className="w-full py-1 px-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-[10px] rounded shadow-xs transition-colors flex items-center justify-center space-x-1"
+                      title="পেমেন্ট রেকর্ড করে প্রেসক্রিপশনটি ডাক্তারের কাছে পাঠান"
+                    >
+                      <Send className="w-3 h-3" />
+                      <span>Send to Doctor</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -3502,14 +3677,18 @@ export function PrescriptionEditor({
                             </span>
                           </td>
                           <td className="py-1 px-2 text-center whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() => handleDeletePayment(p.id)}
-                              className="text-slate-400 hover:text-red-600 p-0.5 rounded transition-colors"
-                              title="Delete Payment"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
+                            {canManagePayment ? (
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePayment(p.id)}
+                                className="text-slate-400 hover:text-red-600 p-0.5 rounded transition-colors"
+                                title="Delete Payment"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            ) : (
+                              <span className="text-slate-300 text-[10px]">-</span>
+                            )}
                           </td>
                         </tr>
                       ))}

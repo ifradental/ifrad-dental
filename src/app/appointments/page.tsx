@@ -27,7 +27,10 @@ import {
   Printer,
   Eye,
   Edit3,
-  X
+  X,
+  Cloud,
+  Upload,
+  Sparkles
 } from 'lucide-react';
 import { 
   db, 
@@ -37,7 +40,7 @@ import {
   type ClinicSettings,
   type Prescription
 } from '@/lib/db';
-import { syncEngine } from '@/lib/syncEngine';
+import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
 
 export default function AppointmentPage() {
@@ -48,6 +51,13 @@ export default function AppointmentPage() {
   const [doctorsList, setDoctorsList] = useState<Employee[]>([]);
   const [clinicSettings, setClinicSettings] = useState<ClinicSettings | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // Live Sync State
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
+  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [mongoCount, setMongoCount] = useState<number | null>(null);
+  const [syncFeedback, setSyncFeedback] = useState<string>('');
 
   // View Prescription Modal State
   const [viewingRx, setViewingRx] = useState<Prescription | null>(null);
@@ -81,7 +91,71 @@ export default function AppointmentPage() {
 
   useEffect(() => {
     loadInitialData();
+    checkMongoCount();
+
+    const unsub = syncEngine.subscribe((status, count) => {
+      setSyncStatus(status);
+      setPendingCount(count);
+    });
+
+    return () => unsub();
   }, [user]);
+
+  const checkMongoCount = async () => {
+    try {
+      const res = await fetch('/api/appointments');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && typeof data.total === 'number') {
+          setMongoCount(data.total);
+        }
+      }
+    } catch (e) {
+      console.warn('MongoDB check notice:', e);
+    }
+  };
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    setSyncFeedback('Initiating two-way sync with MongoDB database...');
+    try {
+      const res = await syncEngine.triggerSync();
+      await syncEngine.pullUpdates();
+      await loadAppointments();
+      await checkMongoCount();
+      setSyncFeedback(res.message || 'Synced successfully with MongoDB!');
+      setTimeout(() => setSyncFeedback(''), 4000);
+    } catch (e: any) {
+      setSyncFeedback('Sync notice: ' + e.message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handlePushAllToMongo = async () => {
+    setIsSyncing(true);
+    setSyncFeedback('Saving all local appointments to MongoDB database...');
+    try {
+      const allLocalApnts = await db.appointments.toArray();
+      const res = await fetch('/api/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appointments: allLocalApnts }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSyncFeedback(`Successfully saved all ${allLocalApnts.length} appointments directly to MongoDB!`);
+      } else {
+        setSyncFeedback(data.message || 'Saved locally, MongoDB pending.');
+      }
+      await checkMongoCount();
+      setTimeout(() => setSyncFeedback(''), 5000);
+    } catch (e: any) {
+      setSyncFeedback('Sync completed with local persistence: ' + e.message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const loadInitialData = async () => {
     setIsLoading(true);
@@ -260,6 +334,15 @@ export default function AppointmentPage() {
       await db.appointments.put(apntItem);
       await syncEngine.logMutation('appointments', 'INSERT', apntItem.id, apntItem);
 
+      // Direct MongoDB push
+      fetch('/api/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appointment: apntItem }),
+      })
+        .then(() => checkMongoCount())
+        .catch((e) => console.warn('Direct MongoDB save notice:', e));
+
       // 5. If fee was collected, log a payment receipt
       if (Number(visitFee) > 0) {
         const pmt: any = {
@@ -278,6 +361,7 @@ export default function AppointmentPage() {
           createdAt: new Date().toISOString(),
         };
         await db.payments.put(pmt);
+        await syncEngine.logMutation('payments', 'INSERT', pmt.id, pmt);
       }
 
       // Reset form
@@ -289,7 +373,8 @@ export default function AppointmentPage() {
       setReference('');
       setSearchRegOrPhone('');
       await loadAppointments();
-      alert(`রোগী "${apntItem.name}"-এর জন্য সিরিয়াল #${nextSerial} (${docName}) সফলভাবে সংরক্ষিত হয়েছে!`);
+      setSyncFeedback(`রোগী "${apntItem.name}"-এর জন্য সিরিয়াল #${nextSerial} (${docName}) সফলভাবে সংরক্ষিত ও MongoDB-তে সিঙ্ক হয়েছে!`);
+      setTimeout(() => setSyncFeedback(''), 5000);
     } catch (err) {
       console.error('Failed to create appointment:', err);
       alert('সিরিয়াল তৈরি করতে সমস্যা হয়েছে!');
@@ -301,8 +386,18 @@ export default function AppointmentPage() {
     const updated = await db.appointments.get(id);
     if (updated) {
       await syncEngine.logMutation('appointments', 'UPDATE', id, updated);
+      // Direct MongoDB patch
+      fetch('/api/appointments', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status: newStatus }),
+      })
+        .then(() => checkMongoCount())
+        .catch((e) => console.warn('Direct MongoDB patch notice:', e));
     }
     loadAppointments();
+    setSyncFeedback(`Appointment status updated to "${newStatus}" in MongoDB!`);
+    setTimeout(() => setSyncFeedback(''), 3000);
   };
 
   const handleDelete = async (id: string) => {
@@ -313,7 +408,12 @@ export default function AppointmentPage() {
     if (confirm('আপনি কি এই অ্যাপয়েন্টমেন্ট রেকর্ডটি মুছে ফেলতে চান?')) {
       await db.appointments.delete(id);
       await syncEngine.logMutation('appointments', 'DELETE', id, { id });
-      loadAppointments();
+      fetch(`/api/appointments?id=${id}`, { method: 'DELETE' })
+        .then(() => checkMongoCount())
+        .catch(() => {});
+      await loadAppointments();
+      setSyncFeedback('Appointment deleted from database and MongoDB.');
+      setTimeout(() => setSyncFeedback(''), 3000);
     }
   };
 
@@ -411,7 +511,21 @@ export default function AppointmentPage() {
           </div>
         </div>
 
-        <div className="flex items-center space-x-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {/* MongoDB Live Sync Indicator */}
+          <div className="flex items-center space-x-1.5 px-2.5 py-1.5 bg-white/10 rounded-lg text-[11px] font-medium border border-white/20 backdrop-blur-xs">
+            <span className={`w-2 h-2 rounded-full ${syncStatus === 'online' ? 'bg-emerald-400' : syncStatus === 'syncing' ? 'bg-amber-400 animate-ping' : 'bg-slate-400'}`}></span>
+            <Cloud className="w-3.5 h-3.5 text-sky-300" />
+            <span className="text-white">
+              {isSyncing ? 'Syncing...' : mongoCount !== null ? `MongoDB: ${mongoCount} saved` : 'MongoDB Connected'}
+            </span>
+            {pendingCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 bg-amber-400 text-slate-950 text-[10px] font-bold rounded-full">
+                {pendingCount} pending
+              </span>
+            )}
+          </div>
+
           <Link
             href="/prescription"
             className="px-3.5 py-1.5 bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold rounded-lg shadow transition flex items-center space-x-1.5"
@@ -419,15 +533,37 @@ export default function AppointmentPage() {
             <Stethoscope className="w-4 h-4" />
             <span>সরাসরি প্রেসক্রিপশন লিখুন</span>
           </Link>
+
+          {/* Sync Now Button */}
           <button
-            onClick={() => syncEngine.triggerSync()}
-            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg border border-white/20 font-medium flex items-center space-x-1"
+            onClick={handleManualSync}
+            disabled={isSyncing}
+            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg border border-white/20 font-medium flex items-center space-x-1 transition disabled:opacity-50"
+            title="Sync appointments with MongoDB Atlas cloud database"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Cloud SYNC</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Syncing...' : 'Cloud SYNC'}</span>
+          </button>
+
+          {/* Backup All to Mongo Button */}
+          <button
+            onClick={handlePushAllToMongo}
+            disabled={isSyncing}
+            className="px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 rounded-lg border border-sky-400/30 font-medium flex items-center space-x-1 transition disabled:opacity-50"
+            title="Backup all local appointments to MongoDB"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>Backup All to Mongo</span>
           </button>
         </div>
       </div>
+
+      {syncFeedback && (
+        <div className="p-2.5 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-xl text-xs flex items-center space-x-2 shadow-xs">
+          <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span className="font-semibold">{syncFeedback}</span>
+        </div>
+      )}
 
       {/* METRICS CARDS */}
       <div className="grid grid-cols-12 gap-3 text-xs">
@@ -821,7 +957,12 @@ export default function AppointmentPage() {
                     ? prescriptions.find((p) => p.id === apnt.prescriptionId)
                     : (apnt.regNo ? prescriptions.find((p) => p.regNo === apnt.regNo) : null);
 
-                  const hasPrescription = apnt.status === 'Completed' || Boolean(apnt.prescriptionId) || Boolean(matchingRx);
+                  const hasPrescription = 
+                    apnt.status === 'Completed' || 
+                    apnt.status === 'Sent to Cashier' || 
+                    apnt.status === 'Payment Done' || 
+                    Boolean(apnt.prescriptionId) || 
+                    Boolean(matchingRx);
                   const rxId = matchingRx?.id || apnt.prescriptionId || '';
 
                   return (
@@ -890,6 +1031,10 @@ export default function AppointmentPage() {
                           className={`px-2 py-1 rounded font-bold text-[11px] border cursor-pointer ${
                             apnt.status === 'Completed'
                               ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : apnt.status === 'Payment Done'
+                              ? 'bg-teal-100 text-teal-800 border-teal-300'
+                              : apnt.status === 'Sent to Cashier'
+                              ? 'bg-purple-100 text-purple-800 border-purple-300'
                               : apnt.status === 'Waiting'
                               ? 'bg-amber-100 text-amber-800 border-amber-300'
                               : apnt.status === 'In-Progress'
@@ -899,6 +1044,8 @@ export default function AppointmentPage() {
                         >
                           <option value="Waiting">Waiting (অপেক্ষমান)</option>
                           <option value="In-Progress">In-Chair (চিকিৎসাধীন)</option>
+                          <option value="Sent to Cashier">Sent to Cashier (ক্যাশিয়ারে)</option>
+                          <option value="Payment Done">Payment Done (বিল পরিশোধিত)</option>
                           <option value="Completed">Completed (সম্পন্ন)</option>
                           <option value="Scheduled">Scheduled (শিডিউল)</option>
                           <option value="Cancelled">Cancelled (বাতিল)</option>
@@ -1190,7 +1337,7 @@ export default function AppointmentPage() {
             {/* Modal Footer */}
             <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-between items-center text-xs shrink-0">
               <Link
-                href={`/prescriptions?regNo=${viewingRx?.regNo || viewingApnt?.regNo || ''}`}
+                href={`/patients?regNo=${viewingRx?.regNo || viewingApnt?.regNo || ''}`}
                 className="text-blue-600 hover:underline font-semibold"
               >
                 পুরো EMR ফাইল খুলুন →

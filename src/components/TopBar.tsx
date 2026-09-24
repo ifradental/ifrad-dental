@@ -219,7 +219,7 @@ export function TopBar() {
                     onClick={() => {
                       setShowSearchDropdown(false);
                       setSearchQuery('');
-                      router.push(`/prescriptions?regNo=${p.regNo}`);
+                      router.push(`/patients?regNo=${p.regNo}`);
                     }}
                     className="p-2 hover:bg-sky-50 rounded-lg cursor-pointer flex items-center justify-between text-xs transition"
                   >
