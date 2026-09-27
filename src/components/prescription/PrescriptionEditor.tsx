@@ -5836,6 +5836,17 @@ export function PrescriptionEditor({
           '3rd Molar (Wisdom)',
         ];
 
+        const toothImages: Record<number, string> = {
+          1: '/central_incisor.png',
+          2: '/lateral_incisor.png',
+          3: '/canine_incisor.png',
+          4: '/1st_premolar.png',
+          5: '/2nd_premolar.png',
+          6: '/1st_molar.png',
+          7: '/2nd_molar.png',
+          8: '/3rd_moller.png',
+        };
+
         return (
           <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[99999] flex items-center justify-center p-3 animate-in fade-in duration-150">
             <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl overflow-hidden flex flex-col max-h-[92vh]">
@@ -5952,11 +5963,11 @@ export function PrescriptionEditor({
                             : 'bg-white border-slate-200 hover:border-sky-300 hover:shadow-sm'
                         }`}
                       >
-                        {/* 1. TOP: Tooth Image teeth.png */}
+                        {/* 1. TOP: Tooth Image (Specific Anatomy Image 1-8) */}
                         <div className="w-full flex items-center justify-center py-2 relative">
                           <img
-                            src="/teeth.png"
-                            alt={`Tooth ${num}`}
+                            src={toothImages[num] || '/teeth.png'}
+                            alt={`Tooth ${num} - ${toothNames[num - 1]}`}
                             className={`w-14 h-14 sm:w-16 sm:h-16 object-contain transition-transform duration-200 group-hover:scale-105 drop-shadow-sm ${
                               isChecked ? 'scale-105 drop-shadow' : 'opacity-85 group-hover:opacity-100'
                             }`}
