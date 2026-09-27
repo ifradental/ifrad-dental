@@ -223,14 +223,14 @@ export default function EmployeesPage() {
   };
 
   // Default designation helper based on role
-  const getDefaultDesignation = (role: EmployeeRole): string => {
+  const getDefaultDesignation = (role: EmployeeRole | string): string => {
     switch (role) {
       case 'Doctor':
         return 'ডেন্টাল সার্জন';
       case 'Receptionist':
-        return 'ফ্রন্ট ডেস্ক এক্সিকিউটিভ';
       case 'Cashier':
-        return 'ক্যাশিয়ার ও হিসাব সহকারী';
+      case 'Receptionist / Cashier':
+        return 'ফ্রন্ট ডেস্ক ও ক্যাশ সহকারী';
       case 'Staff':
         return 'ক্লিনিক্যাল অ্যাসিস্ট্যান্ট';
       default:
@@ -253,8 +253,18 @@ export default function EmployeesPage() {
   const filteredEmployees = useMemo(() => {
     return employees.filter((emp) => {
       // Role filter
-      if (selectedRole !== 'All' && emp.role !== selectedRole) {
-        return false;
+      if (selectedRole !== 'All') {
+        if (selectedRole === 'Receptionist / Cashier') {
+          if (
+            emp.role !== 'Receptionist' &&
+            emp.role !== 'Cashier' &&
+            emp.role !== ('Receptionist / Cashier' as any)
+          ) {
+            return false;
+          }
+        } else if (emp.role !== selectedRole) {
+          return false;
+        }
       }
       // Status filter
       if (selectedStatus !== 'All' && emp.status !== selectedStatus) {
@@ -282,14 +292,15 @@ export default function EmployeesPage() {
     const total = employees.length;
     const active = employees.filter((e) => e.status === 'Active').length;
     const doctors = employees.filter((e) => e.role === 'Doctor').length;
-    const receptionists = employees.filter((e) => e.role === 'Receptionist').length;
-    const cashiers = employees.filter((e) => e.role === 'Cashier').length;
+    const receptionistCashiers = employees.filter((e) =>
+      e.role === 'Receptionist' || e.role === 'Cashier' || e.role === ('Receptionist / Cashier' as any)
+    ).length;
     const staff = employees.filter((e) => e.role === 'Staff').length;
-    return { total, active, doctors, receptionists, cashiers, staff };
+    return { total, active, doctors, receptionistCashiers, staff };
   }, [employees]);
 
   // Role style helper
-  const getRoleBadgeStyle = (role: EmployeeRole) => {
+  const getRoleBadgeStyle = (role: EmployeeRole | string) => {
     switch (role) {
       case 'Doctor':
         return {
@@ -300,20 +311,15 @@ export default function EmployeesPage() {
           labelBn: 'ডাক্তার',
         };
       case 'Receptionist':
+      case 'Cashier':
+      case 'Receptionist / Cashier':
+      case 'Receptionist & Cashier':
         return {
           bg: 'bg-purple-100 text-purple-800 border-purple-200',
           avatarBg: 'bg-purple-600 text-white',
           border: 'border-purple-300',
           icon: <UserCheck className="w-3.5 h-3.5" />,
-          labelBn: 'রিসেপশনিস্ট',
-        };
-      case 'Cashier':
-        return {
-          bg: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-          avatarBg: 'bg-emerald-600 text-white',
-          border: 'border-emerald-300',
-          icon: <CreditCard className="w-3.5 h-3.5" />,
-          labelBn: 'ক্যাশিয়ার',
+          labelBn: 'রিসেপশনিস্ট ও ক্যাশিয়ার',
         };
       case 'Staff':
       default:
@@ -322,7 +328,7 @@ export default function EmployeesPage() {
           avatarBg: 'bg-amber-600 text-white',
           border: 'border-amber-300',
           icon: <ShieldCheck className="w-3.5 h-3.5" />,
-          labelBn: 'স্টাফ',
+          labelBn: 'ক্লিনিক্যাল স্টাফ',
         };
     }
   };
@@ -345,7 +351,7 @@ export default function EmployeesPage() {
               </span>
             </div>
             <p className="text-slate-500 text-xs mt-0.5">
-              Manage clinic doctors, receptionists, cashiers, and staff roles, records & login access
+              Manage clinic doctors, receptionists & cashiers, and clinical staff roles, records & login access
             </p>
           </div>
         </div>
@@ -363,7 +369,7 @@ export default function EmployeesPage() {
       </div>
 
       {/* 2. STATS & KPI METRIC CARDS */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
         <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 text-[10px] font-semibold uppercase">
             <span>Total Employees</span>
@@ -389,24 +395,13 @@ export default function EmployeesPage() {
 
         <div className="bg-purple-50/80 p-3 rounded-xl border border-purple-200 shadow-xs">
           <div className="flex items-center justify-between text-purple-700 text-[10px] font-semibold uppercase">
-            <span>Receptionists</span>
+            <span>Receptionist & Cashier</span>
             <UserCheck className="w-3.5 h-3.5 text-purple-600" />
           </div>
           <div className="mt-1">
-            <span className="text-xl font-black text-purple-950">{metrics.receptionists}</span>
+            <span className="text-xl font-black text-purple-950">{metrics.receptionistCashiers}</span>
           </div>
-          <span className="text-[9px] text-purple-500 block mt-0.5">ফ্রন্ট ডেস্ক কর্মকর্তা</span>
-        </div>
-
-        <div className="bg-emerald-50/80 p-3 rounded-xl border border-emerald-200 shadow-xs">
-          <div className="flex items-center justify-between text-emerald-700 text-[10px] font-semibold uppercase">
-            <span>Cashiers</span>
-            <CreditCard className="w-3.5 h-3.5 text-emerald-600" />
-          </div>
-          <div className="mt-1">
-            <span className="text-xl font-black text-emerald-950">{metrics.cashiers}</span>
-          </div>
-          <span className="text-[9px] text-emerald-500 block mt-0.5">হিসাব ও ক্যাশ সহকারী</span>
+          <span className="text-[9px] text-purple-500 block mt-0.5">ফ্রন্ট ডেস্ক ও ক্যাশ সহকারী</span>
         </div>
 
         <div className="bg-amber-50/80 p-3 rounded-xl border border-amber-200 shadow-xs">
@@ -439,24 +434,26 @@ export default function EmployeesPage() {
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           {/* ROLE TABS */}
           <div className="flex items-center space-x-1 overflow-x-auto pb-1 sm:pb-0">
-            {(['All', 'Doctor', 'Receptionist', 'Cashier', 'Staff'] as const).map((role) => {
-              const isSelected = selectedRole === role;
+            {[
+              { id: 'All', label: 'All Roles (সকল)', icon: null },
+              { id: 'Doctor', label: 'Doctor (ডাক্তার)', icon: <Stethoscope className="w-3 h-3" /> },
+              { id: 'Receptionist / Cashier', label: 'Receptionist / Cashier (রিসেপশন ও ক্যাশ)', icon: <UserCheck className="w-3 h-3" /> },
+              { id: 'Staff', label: 'Staff (স্টাফ)', icon: <ShieldCheck className="w-3 h-3" /> },
+            ].map((tab) => {
+              const isSelected = selectedRole === tab.id;
               return (
                 <button
-                  key={role}
+                  key={tab.id}
                   type="button"
-                  onClick={() => setSelectedRole(role)}
+                  onClick={() => setSelectedRole(tab.id)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
                     isSelected
                       ? 'bg-blue-600 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  {role === 'Doctor' && <Stethoscope className="w-3 h-3" />}
-                  {role === 'Receptionist' && <UserCheck className="w-3 h-3" />}
-                  {role === 'Cashier' && <CreditCard className="w-3 h-3" />}
-                  {role === 'Staff' && <ShieldCheck className="w-3 h-3" />}
-                  <span>{role === 'All' ? 'All Roles (সকল)' : role}</span>
+                  {tab.icon}
+                  <span>{tab.label}</span>
                 </button>
               );
             })}
@@ -862,21 +859,22 @@ export default function EmployeesPage() {
                 <label className="font-bold text-slate-800 block mb-1.5">
                   Select Role (পদমর্যাদা নির্বাচন করুন) <span className="text-red-500">*</span>
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   {(
                     [
-                      { role: 'Doctor', labelBn: 'ডাক্তার', icon: <Stethoscope className="w-4 h-4" />, color: 'indigo' },
-                      { role: 'Receptionist', labelBn: 'রিসেপশনিস্ট', icon: <UserCheck className="w-4 h-4" />, color: 'purple' },
-                      { role: 'Cashier', labelBn: 'ক্যাশিয়ার', icon: <CreditCard className="w-4 h-4" />, color: 'emerald' },
-                      { role: 'Staff', labelBn: 'ক্লিনিক্যাল স্টাফ', icon: <ShieldCheck className="w-4 h-4" />, color: 'amber' },
+                      { role: 'Doctor' as const, labelBn: 'ডাক্তার (ডেন্টাল সার্জন)', icon: <Stethoscope className="w-4 h-4" />, color: 'indigo' },
+                      { role: 'Receptionist / Cashier' as const, labelBn: 'রিসেপশনিস্ট ও ক্যাশ সহকারী', icon: <UserCheck className="w-4 h-4" />, color: 'purple' },
+                      { role: 'Staff' as const, labelBn: 'ক্লিনিক্যাল স্টাফ (সহকারী)', icon: <ShieldCheck className="w-4 h-4" />, color: 'amber' },
                     ] as const
                   ).map((r) => {
-                    const isSelected = formData.role === r.role;
+                    const isSelected =
+                      formData.role === r.role ||
+                      (r.role === 'Receptionist / Cashier' && (formData.role === 'Receptionist' || formData.role === 'Cashier'));
                     return (
                       <button
                         key={r.role}
                         type="button"
-                        onClick={() => handleRoleChange(r.role)}
+                        onClick={() => handleRoleChange(r.role as any)}
                         className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
                           isSelected
                             ? 'bg-blue-50 border-blue-600 ring-2 ring-blue-500/20 shadow-xs'

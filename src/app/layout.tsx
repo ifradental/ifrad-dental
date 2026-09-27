@@ -5,8 +5,8 @@ import { AuthProvider } from '@/context/AuthContext';
 import { AuthAppShell } from '@/components/auth/AuthAppShell';
 
 export const metadata: Metadata = {
-  title: 'Dentist PRO 7.0 - Dental Management System',
-  description: 'Modern Offline-First Dental Management & Prescription Software (Desktop Edition)',
+  title: 'ইফরা ডেন্টাল সেন্টার - Dental Management System',
+  description: 'ইফরা ডেন্টাল সেন্টার - আধুনিক ওয়েব ভিত্তিক ডেন্টাল ম্যানেজমেন্ট ও প্রেসক্রিপশন সফটওয়্যার',
 };
 
 export default function RootLayout({

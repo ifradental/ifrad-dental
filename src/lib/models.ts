@@ -110,6 +110,10 @@ export const SettingsModel: Model<any> =
   (mongoose.models.Settings as Model<any>) || mongoose.model('Settings', GenericSchema);
 export const MaterialModel: Model<any> =
   (mongoose.models.Material as Model<any>) || mongoose.model('Material', GenericSchema);
+export const StockEntryModel: Model<any> =
+  (mongoose.models.StockEntry as Model<any>) || mongoose.model('StockEntry', GenericSchema);
+export const MaterialUsageModel: Model<any> =
+  (mongoose.models.MaterialUsage as Model<any>) || mongoose.model('MaterialUsage', GenericSchema);
 export const ExpenseModel: Model<any> =
   (mongoose.models.Expense as Model<any>) || mongoose.model('Expense', GenericSchema);
 // Template Schema with indexes on type and id
@@ -176,6 +180,8 @@ export const modelMap: Record<string, mongoose.Model<any>> = {
   employees: EmployeeModel,
   settings: SettingsModel,
   materials: MaterialModel,
+  stockEntries: StockEntryModel,
+  materialUsages: MaterialUsageModel,
   expenses: ExpenseModel,
   templates: TemplateModel,
   drugs: DrugModel,

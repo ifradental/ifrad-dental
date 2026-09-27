@@ -1,16 +1,12 @@
 {
-  "name": "dentist-pro-desktop",
+  "name": "ifrad-dental-web",
   "version": "1.0.0",
-  "description": "Modern Offline-First Dental Management System (Dentist PRO Desktop)",
-  "main": "electron/main.js",
+  "description": "ইফরা ডেন্টাল সেন্টার - Modern Dental Management & Prescription Web Application",
   "scripts": {
-    "dev:next": "next dev -p 3000",
-    "build:next": "next build",
-    "start:next": "next start -p 3000",
-    "dev:electron": "electron .",
-    "dev": "concurrently -k \"npm run dev:next\" \"npm run dev:electron\"",
-    "server": "node server/index.js",
-    "dist": "electron-builder"
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "server": "node server/index.js"
   },
   "keywords": [
     "dental",

@@ -345,42 +345,6 @@ export default function TemplatesPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* MongoDB Live Sync Indicator */}
-          <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-slate-50 rounded-lg text-[11px] font-medium border border-slate-200 shadow-xs">
-            <span className={`w-2 h-2 rounded-full ${syncStatus === 'online' ? 'bg-emerald-500' : syncStatus === 'syncing' ? 'bg-amber-500 animate-ping' : 'bg-slate-400'}`}></span>
-            <Cloud className="w-3.5 h-3.5 text-blue-600" />
-            <span className="text-slate-700">
-              {isSyncing ? 'Syncing...' : mongoCount !== null ? `MongoDB: ${mongoCount} saved` : 'MongoDB Connected'}
-            </span>
-            {pendingCount > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-full">
-                {pendingCount} pending
-              </span>
-            )}
-          </div>
-
-          {/* Sync Now Button */}
-          <button
-            onClick={handleManualSync}
-            disabled={isSyncing}
-            className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition disabled:opacity-50"
-            title="Sync templates with MongoDB Atlas cloud database"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'Syncing...' : 'Sync Cloud'}</span>
-          </button>
-
-          {/* Backup All to MongoDB Button */}
-          <button
-            onClick={handlePushAllToMongo}
-            disabled={isSyncing}
-            className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-300 rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition disabled:opacity-50"
-            title="Save all local templates to MongoDB"
-          >
-            <Upload className="w-3.5 h-3.5 text-sky-600" />
-            <span>Backup All to Mongo</span>
-          </button>
-
           <button
             onClick={() => loadTemplates()}
             className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition"

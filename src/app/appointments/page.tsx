@@ -65,7 +65,7 @@ export default function AppointmentPage() {
   const [isViewModalOpen, setIsViewModalOpen] = useState<boolean>(false);
 
   // Filters
-  const [viewFilter, setViewFilter] = useState<'today' | 'upcoming' | 'all'>('today');
+  const [viewFilter, setViewFilter] = useState<'today' | 'upcoming' | 'absent' | 'all'>('today');
   const [selectedDoctorFilter, setSelectedDoctorFilter] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -88,6 +88,7 @@ export default function AppointmentPage() {
   const userRole = (user?.role || '').toLowerCase();
   const isDoctorUser = userRole === 'doctor';
   const isAdmin = userRole === 'admin' || userRole === 'super_admin' || userRole === 'superadmin';
+  const isReceptionistOrCashier = userRole.includes('receptionist') || userRole.includes('cashier');
 
   useEffect(() => {
     loadInitialData();
@@ -401,6 +402,10 @@ export default function AppointmentPage() {
   };
 
   const handleDelete = async (id: string) => {
+    if (isReceptionistOrCashier) {
+      alert('রিসেপশনিস্ট / ক্যাশিয়ার রোল থেকে অ্যাপয়েন্টমেন্ট মুছে ফেলার অনুমতি নেই!');
+      return;
+    }
     if (isDoctorUser) {
       alert('ডাক্তার রোল থেকে সিরিয়াল মোছার অনুমতি নেই!');
       return;
@@ -434,9 +439,10 @@ export default function AppointmentPage() {
         if (!matchesDocId && !matchesDocName) return false;
       }
 
-      // 2. Date Filter
+      // 2. Date & Status Filter
       if (viewFilter === 'today' && a.date !== todayStr) return false;
       if (viewFilter === 'upcoming' && a.date < todayStr) return false;
+      if (viewFilter === 'absent' && a.status !== 'Absent') return false;
 
       // 3. Search Query
       if (searchQuery.trim()) {
@@ -511,51 +517,17 @@ export default function AppointmentPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {/* MongoDB Live Sync Indicator */}
-          <div className="flex items-center space-x-1.5 px-2.5 py-1.5 bg-white/10 rounded-lg text-[11px] font-medium border border-white/20 backdrop-blur-xs">
-            <span className={`w-2 h-2 rounded-full ${syncStatus === 'online' ? 'bg-emerald-400' : syncStatus === 'syncing' ? 'bg-amber-400 animate-ping' : 'bg-slate-400'}`}></span>
-            <Cloud className="w-3.5 h-3.5 text-sky-300" />
-            <span className="text-white">
-              {isSyncing ? 'Syncing...' : mongoCount !== null ? `MongoDB: ${mongoCount} saved` : 'MongoDB Connected'}
-            </span>
-            {pendingCount > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 bg-amber-400 text-slate-950 text-[10px] font-bold rounded-full">
-                {pendingCount} pending
-              </span>
-            )}
+        {!isReceptionistOrCashier && (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Link
+              href="/prescription"
+              className="px-3.5 py-1.5 bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold rounded-lg shadow transition flex items-center space-x-1.5"
+            >
+              <Stethoscope className="w-4 h-4" />
+              <span>সরাসরি প্রেসক্রিপশন লিখুন</span>
+            </Link>
           </div>
-
-          <Link
-            href="/prescription"
-            className="px-3.5 py-1.5 bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold rounded-lg shadow transition flex items-center space-x-1.5"
-          >
-            <Stethoscope className="w-4 h-4" />
-            <span>সরাসরি প্রেসক্রিপশন লিখুন</span>
-          </Link>
-
-          {/* Sync Now Button */}
-          <button
-            onClick={handleManualSync}
-            disabled={isSyncing}
-            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg border border-white/20 font-medium flex items-center space-x-1 transition disabled:opacity-50"
-            title="Sync appointments with MongoDB Atlas cloud database"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'Syncing...' : 'Cloud SYNC'}</span>
-          </button>
-
-          {/* Backup All to Mongo Button */}
-          <button
-            onClick={handlePushAllToMongo}
-            disabled={isSyncing}
-            className="px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 rounded-lg border border-sky-400/30 font-medium flex items-center space-x-1 transition disabled:opacity-50"
-            title="Backup all local appointments to MongoDB"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            <span>Backup All to Mongo</span>
-          </button>
-        </div>
+        )}
       </div>
 
       {syncFeedback && (
@@ -877,6 +849,23 @@ export default function AppointmentPage() {
             আসন্ন (Upcoming)
           </button>
           <button
+            onClick={() => setViewFilter('absent')}
+            className={`px-3 py-1.5 rounded-md font-bold transition cursor-pointer flex items-center space-x-1.5 ${
+              viewFilter === 'absent'
+                ? 'bg-rose-700 text-white shadow-xs'
+                : 'text-rose-700 hover:text-rose-900 hover:bg-rose-50'
+            }`}
+          >
+            <span>অনুপস্থিত (Absent)</span>
+            <span
+              className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                viewFilter === 'absent' ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-800'
+              }`}
+            >
+              {appointments.filter((a) => a.status === 'Absent').length}
+            </span>
+          </button>
+          <button
             onClick={() => setViewFilter('all')}
             className={`px-3 py-1.5 rounded-md font-bold transition cursor-pointer ${
               viewFilter === 'all' ? 'bg-blue-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
@@ -1039,6 +1028,10 @@ export default function AppointmentPage() {
                               ? 'bg-amber-100 text-amber-800 border-amber-300'
                               : apnt.status === 'In-Progress'
                               ? 'bg-blue-100 text-blue-800 border-blue-300'
+                              : apnt.status === 'Absent'
+                              ? 'bg-rose-100 text-rose-800 border-rose-300'
+                              : apnt.status === 'Cancelled'
+                              ? 'bg-red-50 text-red-700 border-red-200'
                               : 'bg-slate-100 text-slate-700 border-slate-300'
                           }`}
                         >
@@ -1047,6 +1040,7 @@ export default function AppointmentPage() {
                           <option value="Sent to Cashier">Sent to Cashier (ক্যাশিয়ারে)</option>
                           <option value="Payment Done">Payment Done (বিল পরিশোধিত)</option>
                           <option value="Completed">Completed (সম্পন্ন)</option>
+                          <option value="Absent">Absent (অনুপস্থিত)</option>
                           <option value="Scheduled">Scheduled (শিডিউল)</option>
                           <option value="Cancelled">Cancelled (বাতিল)</option>
                         </select>
@@ -1057,22 +1051,24 @@ export default function AppointmentPage() {
                         <div className="flex items-center justify-center space-x-1.5">
                           {!hasPrescription ? (
                             <>
-                              <Link
-                                href={`/prescription?regNo=${apnt.regNo || ''}&apntId=${apnt.id}&name=${encodeURIComponent(
-                                  apnt.name
-                                )}&age=${encodeURIComponent(apnt.age || '')}&sex=${apnt.sex || 'M'}&mobile=${encodeURIComponent(
-                                  apnt.mobile
-                                )}&problem=${encodeURIComponent(apnt.problem || '')}&doctor=${encodeURIComponent(
-                                  apnt.doctorName || ''
-                                )}`}
-                                className="px-2.5 py-1.5 bg-gradient-to-r from-blue-700 to-sky-600 hover:from-blue-800 hover:to-sky-700 text-white font-bold rounded-lg shadow-xs hover:shadow transition flex items-center space-x-1 text-xs"
-                                title="এই রোগীর জন্য প্রেসক্রিপশন তৈরি করুন"
-                              >
-                                <FileText className="w-3.5 h-3.5 text-yellow-300" />
-                                <span>Make Prescription</span>
-                              </Link>
+                              {!isReceptionistOrCashier && (
+                                <Link
+                                  href={`/prescription?regNo=${apnt.regNo || ''}&apntId=${apnt.id}&name=${encodeURIComponent(
+                                    apnt.name
+                                  )}&age=${encodeURIComponent(apnt.age || '')}&sex=${apnt.sex || 'M'}&mobile=${encodeURIComponent(
+                                    apnt.mobile
+                                  )}&problem=${encodeURIComponent(apnt.problem || '')}&doctor=${encodeURIComponent(
+                                    apnt.doctorName || ''
+                                  )}`}
+                                  className="px-2.5 py-1.5 bg-gradient-to-r from-blue-700 to-sky-600 hover:from-blue-800 hover:to-sky-700 text-white font-bold rounded-lg shadow-xs hover:shadow transition flex items-center space-x-1 text-xs"
+                                  title="এই রোগীর জন্য প্রেসক্রিপশন তৈরি করুন"
+                                >
+                                  <FileText className="w-3.5 h-3.5 text-yellow-300" />
+                                  <span>Make Prescription</span>
+                                </Link>
+                              )}
 
-                              {!isDoctorUser && (
+                              {!isDoctorUser && !isReceptionistOrCashier && (
                                 <button
                                   onClick={() => handleDelete(apnt.id)}
                                   className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
@@ -1080,6 +1076,12 @@ export default function AppointmentPage() {
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
+                              )}
+
+                              {isReceptionistOrCashier && (
+                                <span className="text-[11px] text-slate-400 font-medium italic">
+                                  প্রেসক্রিপশন অপেক্ষমান
+                                </span>
                               )}
                             </>
                           ) : (
@@ -1096,23 +1098,25 @@ export default function AppointmentPage() {
                               </button>
 
                               {/* EDIT PRESCRIPTION BUTTON (Doctor & Admin) */}
-                              <Link
-                                href={`/prescription?regNo=${apnt.regNo || ''}&rxId=${rxId}&apntId=${apnt.id}&name=${encodeURIComponent(
-                                  apnt.name
-                                )}&age=${encodeURIComponent(apnt.age || '')}&sex=${apnt.sex || 'M'}&mobile=${encodeURIComponent(
-                                  apnt.mobile
-                                )}&problem=${encodeURIComponent(apnt.problem || '')}&doctor=${encodeURIComponent(
-                                  apnt.doctorName || ''
-                                )}`}
-                                className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold rounded-lg transition flex items-center space-x-1 text-xs shadow-xs"
-                                title="প্রেসক্রিপশন সংশোধন / এডিট করুন"
-                              >
-                                <Edit3 className="w-3.5 h-3.5 text-amber-700" />
-                                <span>এডিট</span>
-                              </Link>
+                              {!isReceptionistOrCashier && (
+                                <Link
+                                  href={`/prescription?regNo=${apnt.regNo || ''}&rxId=${rxId}&apntId=${apnt.id}&name=${encodeURIComponent(
+                                    apnt.name
+                                  )}&age=${encodeURIComponent(apnt.age || '')}&sex=${apnt.sex || 'M'}&mobile=${encodeURIComponent(
+                                    apnt.mobile
+                                  )}&problem=${encodeURIComponent(apnt.problem || '')}&doctor=${encodeURIComponent(
+                                    apnt.doctorName || ''
+                                  )}`}
+                                  className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold rounded-lg transition flex items-center space-x-1 text-xs shadow-xs"
+                                  title="প্রেসক্রিপশন সংশোধন / এডিট করুন"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5 text-amber-700" />
+                                  <span>এডিট</span>
+                                </Link>
+                              )}
 
                               {/* DELETE BUTTON (Admin or non-doctor role) */}
-                              {!isDoctorUser && (
+                              {!isDoctorUser && !isReceptionistOrCashier && (
                                 <button
                                   onClick={() => handleDelete(apnt.id)}
                                   className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
@@ -1167,7 +1171,7 @@ export default function AppointmentPage() {
                   <span>প্রিন্ট</span>
                 </button>
 
-                {viewingApnt && (
+                {viewingApnt && !isReceptionistOrCashier && (
                   <Link
                     href={`/prescription?regNo=${viewingRx?.regNo || viewingApnt.regNo || ''}&rxId=${viewingRx?.id || viewingApnt.prescriptionId || ''}&apntId=${viewingApnt.id}&name=${encodeURIComponent(
                       viewingRx?.patientName || viewingApnt.name

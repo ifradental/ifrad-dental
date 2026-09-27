@@ -49,6 +49,7 @@ import {
 } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
+import { PrescriptionPrintSheet } from '@/components/prescription/PrescriptionPrintSheet';
 
 export interface PatientWithStats extends Patient {
   totalVisits: number;
@@ -98,6 +99,16 @@ function PatientManagementContent() {
     address: '',
     occupation: '',
   });
+
+  // Delete Confirmation Modal State
+  const [patientToDelete, setPatientToDelete] = useState<PatientWithStats | null>(null);
+  const [deleteCascadeHistory, setDeleteCascadeHistory] = useState<boolean>(true);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
+  const userRole = (user?.role || '').toLowerCase();
+  const isReceptionistOrCashier = userRole.includes('receptionist') || userRole.includes('cashier');
+  const isDoctorUser = userRole === 'doctor';
+  const isAdmin = userRole === 'admin' || userRole === 'super_admin' || userRole === 'superadmin';
 
   useEffect(() => {
     loadAllData();
@@ -377,19 +388,81 @@ function PatientManagementContent() {
     setIsAddPatientModalOpen(true);
   };
 
-  // Delete Patient
-  const handleDeletePatient = async (patient: PatientWithStats) => {
-    if (confirm(`আপনি কি নিশ্চিত যে রোগী "${patient.name}" (Reg #${patient.regNo}) এর রেকর্ড মুছে ফেলতে চান?`)) {
-      try {
-        await db.patients.delete(patient.id);
-        await syncEngine.logMutation('patients', 'DELETE', patient.id, { id: patient.id });
-        if (selectedPatient?.regNo === patient.regNo) {
-          setSelectedPatient(null);
-        }
-        await loadAllData();
-      } catch (err) {
-        console.error('Error deleting patient:', err);
+  // Delete Patient Prompt / Open Modal
+  const handleDeletePatient = (patient: PatientWithStats) => {
+    if (isReceptionistOrCashier) {
+      alert('রিসেপশনিস্ট / ক্যাশিয়ার রোল থেকে রোগীর রেকর্ড মুছে ফেলার অনুমতি নেই!');
+      return;
+    }
+    setPatientToDelete(patient);
+    setDeleteCascadeHistory(true);
+  };
+
+  // Perform Actual Delete
+  const handleConfirmDelete = async () => {
+    if (!patientToDelete) return;
+    setIsDeleting(true);
+    try {
+      const reg = Number(patientToDelete.regNo);
+      const pId = patientToDelete.id;
+
+      // 1. Delete from patients table
+      if (pId) {
+        await db.patients.delete(pId);
+        await syncEngine.logMutation('patients', 'DELETE', pId, { id: pId });
       }
+      if (reg) {
+        const ptsWithReg = await db.patients.where('regNo').equals(reg).toArray();
+        for (const p of ptsWithReg) {
+          await db.patients.delete(p.id);
+          await syncEngine.logMutation('patients', 'DELETE', p.id, { id: p.id });
+        }
+      }
+
+      // 2. Cascade delete history if checked
+      if (deleteCascadeHistory && reg) {
+        // Prescriptions
+        const rxs = await db.prescriptions.where('regNo').equals(reg).toArray();
+        for (const rx of rxs) {
+          await db.prescriptions.delete(rx.id);
+          await syncEngine.logMutation('prescriptions', 'DELETE', rx.id, { id: rx.id });
+        }
+
+        // Appointments
+        const apnts = await db.appointments.where('regNo').equals(reg).toArray();
+        for (const ap of apnts) {
+          await db.appointments.delete(ap.id);
+          await syncEngine.logMutation('appointments', 'DELETE', ap.id, { id: ap.id });
+        }
+
+        // Payments
+        const pmts = await db.payments.where('regNo').equals(reg).toArray();
+        for (const pm of pmts) {
+          await db.payments.delete(pm.id);
+          await syncEngine.logMutation('payments', 'DELETE', pm.id, { id: pm.id });
+        }
+
+        // Treatment Sessions
+        const sessions = await db.treatmentSessions.where('regNo').equals(reg).toArray();
+        for (const s of sessions) {
+          await db.treatmentSessions.delete(s.id);
+          await syncEngine.logMutation('treatmentSessions' as any, 'DELETE', s.id, { id: s.id });
+        }
+      }
+
+      // Trigger sync
+      syncEngine.triggerSync().catch(console.warn);
+
+      if (selectedPatient?.regNo === reg) {
+        setSelectedPatient(null);
+      }
+      setPatientToDelete(null);
+      await loadAllData();
+    } catch (err) {
+      console.error('Error deleting patient:', err);
+      alert('রোগী মুছতে সমস্যা হয়েছে!');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -442,7 +515,8 @@ function PatientManagementContent() {
   }, [selectedPatientPrescriptions]);
 
   return (
-    <div className="p-3 sm:p-5 max-w-[1700px] mx-auto text-slate-800 space-y-4">
+    <>
+      <div className={`p-3 sm:p-5 max-w-[1700px] mx-auto text-slate-800 space-y-4 ${printableRx ? 'no-print' : ''}`}>
       {/* 1. TOP HEADER & ACTION BAR */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
         <div>
@@ -707,17 +781,19 @@ function PatientManagementContent() {
                           <span>ইতিহাস</span>
                         </button>
 
-                        {/* Make Prescription Link */}
-                        <Link
-                          href={`/prescription?regNo=${pt.regNo}&name=${encodeURIComponent(pt.name)}&age=${encodeURIComponent(
-                            pt.age || ''
-                          )}&sex=${pt.sex || 'M'}&mobile=${encodeURIComponent(pt.mobile || '')}`}
-                          className="px-2 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg font-bold text-xs transition flex items-center space-x-1 shadow-xs"
-                          title="এই রোগীর জন্য প্রেসক্রিপশন তৈরি করুন"
-                        >
-                          <FileText className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Rx</span>
-                        </Link>
+                        {/* Make Prescription Link (Doctor & Admin only) */}
+                        {!isReceptionistOrCashier && (
+                          <Link
+                            href={`/prescription?regNo=${pt.regNo}&name=${encodeURIComponent(pt.name)}&age=${encodeURIComponent(
+                              pt.age || ''
+                            )}&sex=${pt.sex || 'M'}&mobile=${encodeURIComponent(pt.mobile || '')}`}
+                            className="px-2 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg font-bold text-xs transition flex items-center space-x-1 shadow-xs"
+                            title="এই রোগীর জন্য প্রেসক্রিপশন তৈরি করুন"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Rx</span>
+                          </Link>
+                        )}
 
                         {/* Edit Info */}
                         <button
@@ -729,15 +805,17 @@ function PatientManagementContent() {
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
 
-                        {/* Delete Patient */}
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePatient(pt)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                          title="রোগীর রেকর্ড মুছুন"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {/* Delete Patient (Admin & Doctor only, hidden for Receptionist / Cashier) */}
+                        {!isReceptionistOrCashier && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePatient(pt)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                            title="রোগীর রেকর্ড মুছুন"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -793,17 +871,19 @@ function PatientManagementContent() {
 
               {/* Header Actions */}
               <div className="flex items-center space-x-2">
-                <Link
-                  href={`/prescription?regNo=${selectedPatient.regNo}&name=${encodeURIComponent(
-                    selectedPatient.name
-                  )}&age=${encodeURIComponent(selectedPatient.age || '')}&sex=${
-                    selectedPatient.sex || 'M'
-                  }&mobile=${encodeURIComponent(selectedPatient.mobile || '')}`}
-                  className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs flex items-center space-x-1.5 transition shadow-xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>নতুন প্রেসক্রিপশন</span>
-                </Link>
+                {!isReceptionistOrCashier && (
+                  <Link
+                    href={`/prescription?regNo=${selectedPatient.regNo}&name=${encodeURIComponent(
+                      selectedPatient.name
+                    )}&age=${encodeURIComponent(selectedPatient.age || '')}&sex=${
+                      selectedPatient.sex || 'M'
+                    }&mobile=${encodeURIComponent(selectedPatient.mobile || '')}`}
+                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs flex items-center space-x-1.5 transition shadow-xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>নতুন প্রেসক্রিপশন</span>
+                  </Link>
+                )}
 
                 <button
                   type="button"
@@ -813,6 +893,17 @@ function PatientManagementContent() {
                 >
                   <Edit3 className="w-4 h-4" />
                 </button>
+
+                {!isReceptionistOrCashier && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeletePatient(selectedPatient)}
+                    className="p-2 text-rose-300 hover:text-white hover:bg-rose-600/30 rounded-xl transition"
+                    title="রোগীর সম্পূর্ণ রেকর্ড মুছুন"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -1232,12 +1323,14 @@ function PatientManagementContent() {
         </div>
       )}
 
+      </div>
+
       {/* =========================================================================
           6. PRINTABLE PRESCRIPTION MODAL (HIGH RESOLUTION FOR PRINT & SAVE PDF)
           ========================================================================= */}
       {printableRx && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-300 w-full max-w-4xl max-h-[96vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto print-modal-overlay">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-300 w-full max-w-4xl max-h-[96vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150 print-modal-container">
             {/* Top Toolbar (No-Print) */}
             <div className="no-print px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800 shrink-0">
               <div className="flex items-center space-x-2">
@@ -1269,183 +1362,17 @@ function PatientManagementContent() {
             </div>
 
             {/* Printable Letterhead & Medical Record Preview */}
-            <div className="p-6 overflow-y-auto font-serif bg-white text-slate-900" id="printable-prescription-sheet">
-              {/* Clinic Header */}
-              {clinicSettings && (
-                <div className="text-center border-b-2 border-slate-800 pb-3 mb-3">
-                  <h1 className="text-2xl font-bold font-sans text-slate-900">
-                    {clinicSettings.clinicName}
-                  </h1>
-                  <div className="grid grid-cols-3 gap-2 text-center text-xs font-sans mt-2 divide-x divide-slate-300">
-                    <div>
-                      <div className="font-bold text-blue-950">{clinicSettings.doctor1.name}</div>
-                      <div className="text-[11px] text-slate-600">{clinicSettings.doctor1.degrees}</div>
-                      <div className="text-[10px] text-slate-500">{clinicSettings.doctor1.designation}</div>
-                      <div className="text-[10px] text-slate-500">বিএমডিসি নং- {clinicSettings.doctor1.bmdcReg}</div>
-                    </div>
-                    <div>
-                      <div className="font-bold text-blue-950">{clinicSettings.doctor2.name}</div>
-                      <div className="text-[11px] text-slate-600">{clinicSettings.doctor2.degrees}</div>
-                      <div className="text-[10px] text-slate-500">{clinicSettings.doctor2.designation}</div>
-                      <div className="text-[10px] text-slate-500">বিএমডিসি নং- {clinicSettings.doctor2.bmdcReg}</div>
-                    </div>
-                    <div>
-                      <div className="font-bold text-blue-950">{clinicSettings.doctor3.name}</div>
-                      <div className="text-[11px] text-slate-600">{clinicSettings.doctor3.degrees}</div>
-                      <div className="text-[10px] text-slate-500">{clinicSettings.doctor3.designation}</div>
-                      <div className="text-[10px] text-slate-500">বিএমডিসি নং- {clinicSettings.doctor3.bmdcReg}</div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Patient Banner */}
-              <div className="border-b border-slate-300 pb-2 mb-4 text-xs font-sans">
-                <div className="grid grid-cols-12 gap-2">
-                  <div className="col-span-5">
-                    <span className="font-semibold text-slate-600">Name:</span>{' '}
-                    <span className="font-bold text-slate-900">{printableRx.patientName}</span>
-                  </div>
-                  <div className="col-span-2">
-                    <span className="font-semibold text-slate-600">Age:</span>{' '}
-                    <span>{printableRx.age}</span>
-                  </div>
-                  <div className="col-span-2">
-                    <span className="font-semibold text-slate-600">Sex:</span>{' '}
-                    <span>{printableRx.sex}</span>
-                  </div>
-                  <div className="col-span-3 text-right">
-                    <span className="font-semibold text-slate-600">Date:</span>{' '}
-                    <span className="font-bold">{printableRx.date}</span>
-                  </div>
-                  <div className="col-span-5">
-                    <span className="font-semibold text-slate-600">Address:</span>{' '}
-                    <span>{printableRx.address || 'Dhaka'}</span>
-                  </div>
-                  <div className="col-span-4">
-                    <span className="font-semibold text-slate-600">Reg No:</span>{' '}
-                    <span className="font-bold font-mono text-blue-900">{printableRx.regNo}</span>
-                  </div>
-                  <div className="col-span-3 text-right">
-                    <span className="font-semibold text-slate-600">Mobile:</span>{' '}
-                    <span>{printableRx.mobile}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Clinical Two-Column Layout */}
-              <div className="grid grid-cols-12 gap-5 min-h-[420px]">
-                {/* Left Column: Complaints, O/E, Dx */}
-                <div className="col-span-4 border-r border-slate-300 pr-3 space-y-4 text-xs font-sans">
-                  {printableRx.cc && printableRx.cc.length > 0 && (
-                    <div>
-                      <div className="font-bold text-slate-900 border-b border-slate-200 pb-0.5 mb-1">
-                        Chief Complaints (C/C):
-                      </div>
-                      <ul className="list-disc list-inside space-y-0.5 text-slate-700">
-                        {printableRx.cc.map((c, i) => (
-                          <li key={i}>{c}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {printableRx.oe && printableRx.oe.length > 0 && (
-                    <div>
-                      <div className="font-bold text-slate-900 border-b border-slate-200 pb-0.5 mb-1">
-                        On Examination (O/E):
-                      </div>
-                      <ul className="list-disc list-inside space-y-0.5 text-slate-700">
-                        {printableRx.oe.map((o, i) => (
-                          <li key={i}>{o}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {printableRx.dx && printableRx.dx.length > 0 && (
-                    <div>
-                      <div className="font-bold text-blue-900 border-b border-slate-200 pb-0.5 mb-1">
-                        Diagnosis (Dx):
-                      </div>
-                      <ul className="list-disc list-inside space-y-0.5 font-bold text-blue-950">
-                        {printableRx.dx.map((d, i) => (
-                          <li key={i}>{d}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {printableRx.ix && printableRx.ix.length > 0 && (
-                    <div>
-                      <div className="font-bold text-slate-900 border-b border-slate-200 pb-0.5 mb-1">
-                        Investigation (Ix):
-                      </div>
-                      <ul className="list-disc list-inside space-y-0.5 text-slate-700">
-                        {printableRx.ix.map((x, i) => (
-                          <li key={i}>{x}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-
-                {/* Right Column: Rx Medications & Advices */}
-                <div className="col-span-8 pl-1 font-sans">
-                  <div className="text-xl font-bold font-serif mb-2 text-slate-900">Rx</div>
-
-                  {printableRx.medicines && printableRx.medicines.filter((m) => m.brand?.trim()).length > 0 ? (
-                    <div className="space-y-3">
-                      {printableRx.medicines
-                        .filter((m) => m.brand?.trim())
-                        .map((m, idx) => (
-                          <div key={idx} className="pb-2 border-b border-slate-100">
-                            <div className="font-bold text-slate-900 text-xs">
-                              {idx + 1}. {m.brand}
-                            </div>
-                            <div className="text-[11px] text-slate-600 pl-4">
-                              {m.dose} • {m.instruction} • {m.duration}
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  ) : (
-                    <div className="text-slate-400 italic text-xs">কোনো ওষুধ তালিকাভুক্ত নেই</div>
-                  )}
-
-                  {/* Advices */}
-                  {printableRx.advice && printableRx.advice.filter(Boolean).length > 0 && (
-                    <div className="mt-5 pt-3 border-t border-slate-200">
-                      <div className="font-bold text-slate-900 text-xs mb-1">উপদেশাবলী (Advice):</div>
-                      <ul className="list-disc list-inside text-xs text-slate-700 space-y-0.5">
-                        {printableRx.advice.filter(Boolean).map((adv, idx) => (
-                          <li key={idx}>{adv}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Next Visit */}
-                  {(printableRx.nextVisitDate || printableRx.revisitText) && (
-                    <div className="mt-4 pt-2 text-xs font-semibold text-blue-900">
-                      পরবর্তী সাক্ষাত: {printableRx.nextVisitDate || printableRx.revisitText}{' '}
-                      {printableRx.timeSlot ? `• ${printableRx.timeSlot}` : ''}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Footer & Signature */}
-              <div className="mt-8 pt-4 border-t border-slate-300 flex justify-between items-end text-xs font-sans">
-                <div className="text-[10px] text-slate-500 max-w-md">
-                  {clinicSettings?.footerText ||
-                    'নন্দীপাড়া ব্রিজ সংলগ্ন (২য় তলা), খিলগাঁও, ঢাকা। রোগী দেখার সময়: সকাল ১০টা থেকে দুপুর ২টা, বিকাল ৪টা থেকে রাত ১০টা।'}
-                </div>
-                <div className="text-center">
-                  <div className="border-t border-slate-400 w-36 mb-1"></div>
-                  <div className="text-[11px] font-bold text-slate-800">চিকিৎসকের স্বাক্ষর</div>
-                </div>
-              </div>
+            <div className="p-4 sm:p-6 overflow-y-auto bg-slate-100 flex justify-center">
+              <PrescriptionPrintSheet
+                prescription={{
+                  ...printableRx,
+                  address: printableRx.address || printableRxPatient?.address || '',
+                  occupation: printableRxPatient?.occupation || '',
+                  mobile: printableRx.mobile || printableRxPatient?.mobile || '',
+                }}
+                clinicSettings={clinicSettings}
+                printMode="full"
+              />
             </div>
           </div>
         </div>
@@ -1580,7 +1507,109 @@ function PatientManagementContent() {
           </div>
         </div>
       )}
-    </div>
+
+      {/* =========================================================================
+          6. DELETE PATIENT CONFIRMATION MODAL
+          ========================================================================= */}
+      {patientToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-red-200 w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-5 py-4 bg-gradient-to-r from-red-600 to-rose-700 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-9 h-9 bg-white/10 rounded-xl flex items-center justify-center border border-white/20">
+                  <Trash2 className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base leading-tight">রোগীর রেকর্ড মুছুন</h3>
+                  <p className="text-[11px] text-red-100">Delete Patient Record</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPatientToDelete(null)}
+                className="p-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4 text-xs">
+              <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl">
+                <div className="flex items-center space-x-2 text-rose-900 font-bold text-sm mb-1.5">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>আপনি কি নিশ্চিত?</span>
+                </div>
+                <p className="text-slate-600 leading-relaxed">
+                  রোগী <strong className="text-slate-900 font-bold font-sans">"{patientToDelete.name}"</strong> (Reg #{patientToDelete.regNo})-এর ডাটা মুছে ফেলতে যাচ্ছেন।
+                </p>
+              </div>
+
+              {/* Patient Info Summary */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5 font-medium text-slate-700">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">নাম:</span>
+                  <span className="font-bold text-slate-900">{patientToDelete.name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">রেজিস্ট্রেশন নং:</span>
+                  <span className="font-bold text-blue-900 font-mono">#{patientToDelete.regNo}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">মোবাইল:</span>
+                  <span className="font-bold text-slate-800 font-mono">{patientToDelete.mobile || 'নেই'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">মোট প্রেসক্রিপশন:</span>
+                  <span className="font-bold text-slate-800">{patientToDelete.prescriptionsCount || 0} টি</span>
+                </div>
+                {patientToDelete.totalDue > 0 && (
+                  <div className="flex justify-between pt-1 border-t border-slate-200 text-rose-700 font-bold">
+                    <span>বকেয়া (Due):</span>
+                    <span className="font-mono">৳ {patientToDelete.totalDue}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Cascade Delete Checkbox */}
+              <label className="flex items-start space-x-2.5 p-2.5 bg-amber-50 border border-amber-200 rounded-xl cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteCascadeHistory}
+                  onChange={(e) => setDeleteCascadeHistory(e.target.checked)}
+                  className="mt-0.5 rounded text-red-600 focus:ring-red-500 w-4 h-4 cursor-pointer"
+                />
+                <span className="text-[11px] text-amber-900 font-semibold leading-snug">
+                  এই রোগীর সাথে সম্পর্কিত সকল <strong>প্রেসক্রিপশন, অ্যাপয়েন্টমেন্ট, পেমেন্ট ও ট্রিটমেন্ট হিস্ট্রি</strong> একসাথে সম্পূর্ণ মুছে ফেলুন।
+                </span>
+              </label>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setPatientToDelete(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition cursor-pointer disabled:opacity-50"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={handleConfirmDelete}
+                  className="px-5 py-2 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-bold rounded-xl transition shadow-sm flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>{isDeleting ? 'মুছে ফেলা হচ্ছে...' : 'হ্যাঁ, মুছে ফেলুন'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

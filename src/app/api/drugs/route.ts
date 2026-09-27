@@ -31,8 +31,10 @@ export async function GET(req: NextRequest) {
       const regex = new RegExp(search.trim(), 'i');
       filter.$or = [
         { name: regex },
+        { prescriptionName: regex },
         { generic: regex },
         { company: regex },
+        { form: regex },
         { indication: regex },
       ];
     }

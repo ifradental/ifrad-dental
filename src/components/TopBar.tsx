@@ -16,17 +16,10 @@ import {
   AlertTriangle, 
   Calendar, 
   CheckCircle2, 
-  Wifi, 
-  WifiOff, 
-  RefreshCw,
-  FileText,
-  Clock,
-  ExternalLink,
   X
 } from 'lucide-react';
 import { db, type Patient, type MaterialItem, type Appointment } from '@/lib/db';
 import { useAuth } from '@/context/AuthContext';
-import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 
 export function TopBar() {
   const router = useRouter();
@@ -50,21 +43,11 @@ export function TopBar() {
   // Profile Menu State
   const [showProfileMenu, setShowProfileMenu] = useState<boolean>(false);
 
-  // Sync State
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
-  const [pendingCount, setPendingCount] = useState<number>(0);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-
   const searchRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const unsub = syncEngine.subscribe((status, count) => {
-      setSyncStatus(status);
-      setPendingCount(count);
-    });
-
     loadNotifications();
 
     // Click outside handler to close dropdowns
@@ -82,7 +65,6 @@ export function TopBar() {
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
-      unsub();
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
@@ -117,16 +99,6 @@ export function TopBar() {
         link: '/appointments',
       });
     }
-
-    // 3. Offline database status
-    notifs.push({
-      id: 'db_ready',
-      type: 'sync',
-      title: 'লোকাল ডাটাবেজ সক্রিয়',
-      message: 'সফটওয়্যারটি সম্পূর্ণ অফলাইনে কাজ করার জন্য প্রস্তুত।',
-      time: 'Active',
-      link: '/database',
-    });
 
     setNotifications(notifs);
   };
@@ -168,12 +140,6 @@ export function TopBar() {
     executeSearch();
   }, [searchQuery]);
 
-  const handleManualSync = async () => {
-    setIsSyncing(true);
-    await syncEngine.triggerSync();
-    setIsSyncing(false);
-  };
-
   return (
     <header className="no-print bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-sm sticky top-0 z-40 px-4 py-2.5 flex items-center justify-between gap-3 select-none">
       {/* 1. GLOBAL SEARCH BAR */}
@@ -187,7 +153,7 @@ export function TopBar() {
             onFocus={() => {
               if (searchQuery.length >= 2) setShowSearchDropdown(true);
             }}
-            placeholder="রোগীর নাম, Reg No (#4198), মোবাইল অথবা ঔষধের নাম খুঁজুন..."
+            placeholder="রোগীর নাম, Reg No, মোবাইল অথবা ঔষধের নাম খুঁজুন..."
             className="w-full pl-9 pr-8 py-1.5 bg-slate-100/90 hover:bg-slate-100 focus:bg-white border border-slate-200 focus:border-blue-500 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition"
           />
           {searchQuery && (
@@ -293,35 +259,6 @@ export function TopBar() {
           <span>নতুন প্রেসক্রিপশন</span>
         </Link>
 
-        {/* Sync Status Mini Indicator */}
-        <div className="hidden sm:flex items-center space-x-1 px-2.5 py-1 bg-slate-100 rounded-lg border border-slate-200 text-xs font-medium">
-          {syncStatus === 'online' ? (
-            <span className="flex items-center space-x-1 text-emerald-600">
-              <Wifi className="w-3.5 h-3.5" />
-              <span className="text-[11px]">Synced</span>
-            </span>
-          ) : syncStatus === 'syncing' || isSyncing ? (
-            <span className="flex items-center space-x-1 text-amber-600 animate-pulse">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-              <span className="text-[11px]">Syncing...</span>
-            </span>
-          ) : (
-            <span className="flex items-center space-x-1 text-slate-600">
-              <WifiOff className="w-3.5 h-3.5 text-slate-400" />
-              <span className="text-[11px]">Offline ({pendingCount})</span>
-            </span>
-          )}
-
-          <button
-            onClick={handleManualSync}
-            disabled={isSyncing}
-            title="Sync with MongoDB"
-            className="p-0.5 hover:bg-slate-200 rounded text-slate-600 transition"
-          >
-            <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-
         {/* 3. NOTIFICATIONS BELL POPOVER */}
         <div ref={notifRef} className="relative">
           <button
@@ -420,7 +357,7 @@ export function TopBar() {
                 <div className="text-[11px] text-slate-500 font-mono">Role: {user?.role || 'Doctor'}</div>
                 <div className="mt-1 flex items-center space-x-1 text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded w-fit">
                   <ShieldCheck className="w-3 h-3" />
-                  <span>Offline Ready</span>
+                  <span>Web Edition</span>
                 </div>
               </div>
 
@@ -450,15 +387,6 @@ export function TopBar() {
                 >
                   <Settings className="w-3.5 h-3.5 text-slate-400" />
                   <span>Print & App Settings</span>
-                </Link>
-
-                <Link
-                  href="/database"
-                  onClick={() => setShowProfileMenu(false)}
-                  className="flex items-center space-x-2 px-3.5 py-2 hover:bg-slate-50 text-slate-700 font-medium transition"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Cloud MongoDB Sync</span>
                 </Link>
               </div>
 

@@ -1,9 +1,12 @@
 'use client';
 
 import React, { useState } from 'react';
-import { MessageSquare, Send, CheckCircle2, Sliders, Smartphone } from 'lucide-react';
+import Link from 'next/link';
+import { MessageSquare, Send, CheckCircle2, Sliders, Smartphone, ShieldAlert, LayoutDashboard } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 
 export default function SMSPage() {
+  const { user } = useAuth();
   const [patientMobile, setPatientMobile] = useState<string>('');
   const [smsText, setSmsText] = useState<string>(
     'সম্মানিত রোগী, ইফরা ডেন্টাল এ আপনার পরবর্তী অ্যাপয়েন্টমেন্ট ১০/০৯/২০২৬ সকাল ১০:০০ টায়। ধন্যবাদ।'
@@ -11,6 +14,40 @@ export default function SMSPage() {
   const [smsGateway, setSmsGateway] = useState<string>('Greenweb Bangladesh');
   const [smsApiKey, setSmsApiKey] = useState<string>('GW_BD_DEMO_KEY_9921');
   const [senderId, setSenderId] = useState<string>('IFRA DENTAL');
+
+  const userRole = (user?.role || '').toLowerCase();
+  const isAdmin = userRole === 'admin' || userRole === 'super_admin' || userRole === 'superadmin';
+
+  if (!isAdmin) {
+    return (
+      <div className="min-h-[80vh] flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl border border-rose-200 shadow-xl max-w-md w-full p-6 text-center space-y-4">
+          <div className="w-16 h-16 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-black text-slate-900">
+              অ্যাক্সেস সংরক্ষিত (Access Restricted)
+            </h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              এসএমএস গেটওয়ে কনফিগারেশন পেজের অ্যাক্সেস শুধুমাত্র <strong className="text-blue-900">অ্যাডমিনিস্ট্রেটরের</strong> জন্য সংরক্ষিত।
+            </p>
+          </div>
+
+          <div className="pt-2">
+            <Link
+              href="/dashboard"
+              className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs transition flex items-center justify-center space-x-1.5"
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              <span>ড্যাশবোর্ডে ফিরুন</span>
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const handleSendSMS = (e: React.FormEvent) => {
     e.preventDefault();

@@ -75,7 +75,7 @@ export default function DatabasePage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `DentistPRO_Offline_Backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `IfradDental_Backup_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
   };
 
@@ -87,7 +87,7 @@ export default function DatabasePage() {
           <div className="flex items-center space-x-2">
             <Database className="w-5 h-5 text-blue-600" />
             <h1 className="text-base font-bold text-blue-950">
-              Offline Database & Cloud MongoDB Sync Manager
+              Database & Cloud MongoDB Sync Manager
             </h1>
           </div>
 
@@ -97,7 +97,7 @@ export default function DatabasePage() {
               className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-semibold flex items-center space-x-1 border border-slate-300"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Export Local Backup (JSON)</span>
+              <span>Export System Backup (JSON)</span>
             </button>
             <button
               onClick={handleManualSync}
@@ -116,7 +116,7 @@ export default function DatabasePage() {
           <div className="col-span-12 md:col-span-6 bg-sky-50 border border-sky-200 rounded p-4 space-y-3">
             <div className="flex items-center space-x-2 font-bold text-blue-900 text-sm pb-1 border-b border-sky-200">
               <HardDrive className="w-4 h-4 text-blue-600" />
-              <span>Local Desktop Storage (Offline PC Database)</span>
+              <span>Browser Storage & High-Speed Cache</span>
             </div>
             <div className="grid grid-cols-3 gap-2 text-center">
               <div className="bg-white p-2 rounded border border-slate-200">
@@ -162,7 +162,7 @@ export default function DatabasePage() {
                     : 'bg-slate-200 text-slate-700'
                 }`}
               >
-                {syncStatus === 'online' ? 'LIVE CONNECTED' : syncStatus === 'syncing' ? 'SYNCING' : 'OFFLINE MODE'}
+                {syncStatus === 'online' ? 'LIVE CONNECTED' : syncStatus === 'syncing' ? 'SYNCING' : 'CLOUD READY'}
               </span>
             </div>
 

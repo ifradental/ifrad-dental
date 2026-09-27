@@ -136,27 +136,13 @@ export default function DashboardPage() {
     );
   }
 
-  if (rawRole === 'receptionist') {
+  if (rawRole.includes('receptionist') || rawRole.includes('cashier')) {
     return (
       <ReceptionistDashboard
         user={user}
         clinicSettings={clinicSettings}
         todayAppointments={todayAppointments}
         patientsCount={patientsCount}
-        todayStr={todayStr}
-      />
-    );
-  }
-
-  if (rawRole === 'cashier') {
-    return (
-      <CashierDashboard
-        user={user}
-        clinicSettings={clinicSettings}
-        totalCollected={totalCollected}
-        todayCollected={todayCollected}
-        totalDues={totalDues}
-        paymentsList={paymentsList}
         todayStr={todayStr}
       />
     );
@@ -476,6 +462,7 @@ function DoctorDashboard({
               <option value="Waiting">Waiting (অপেক্ষমান)</option>
               <option value="In-Progress">In-Progress (চিকিৎসাধীন)</option>
               <option value="Completed">Completed (সম্পন্ন)</option>
+              <option value="Absent">Absent (অনুপস্থিত)</option>
               <option value="Scheduled">Scheduled (শিডিউল)</option>
               <option value="Cancelled">Cancelled (বাতিল)</option>
             </select>
@@ -659,10 +646,12 @@ function DoctorDashboard({
                               ? 'bg-emerald-100 text-emerald-800'
                               : apnt.status === 'Waiting'
                               ? 'bg-amber-100 text-amber-800'
+                              : apnt.status === 'Absent'
+                              ? 'bg-rose-100 text-rose-800'
                               : 'bg-blue-100 text-blue-800'
                           }`}
                         >
-                          {apnt.status === 'Completed' ? '✓ সম্পন্ন' : apnt.status === 'Waiting' ? 'অপেক্ষমাণ' : apnt.status}
+                          {apnt.status === 'Completed' ? '✓ সম্পন্ন' : apnt.status === 'Waiting' ? 'অপেক্ষমাণ' : apnt.status === 'Absent' ? 'অনুপস্থিত' : apnt.status}
                         </span>
 
                         {apnt.status === 'Completed' ? (
@@ -1189,7 +1178,7 @@ function ReceptionistDashboard({
 
   return (
     <div className="p-3.5 max-w-[1550px] mx-auto text-slate-800 space-y-4">
-      {/* Receptionist Top Banner */}
+      {/* Receptionist & Cashier Top Banner */}
       <div className="bg-gradient-to-r from-emerald-800 via-teal-700 to-cyan-900 rounded-xl p-5 text-white shadow-md flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center space-x-3.5">
           <div className="w-14 h-14 bg-white rounded-xl flex items-center justify-center text-3xl shadow-inner border border-teal-200">
@@ -1202,11 +1191,11 @@ function ReceptionistDashboard({
               </h1>
               <span className="bg-emerald-400 text-slate-950 text-[10px] font-black px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
                 <UserCheck className="w-3 h-3" />
-                <span>রিসেপশন ও ফ্রন্ট ডেস্ক ড্যাশবোর্ড</span>
+                <span>রিসেপশন ও ক্যাশ কাউন্টার ড্যাশবোর্ড</span>
               </span>
             </div>
             <p className="text-xs text-teal-100 mt-0.5">
-              স্বাগতম, <span className="font-semibold text-white">{user?.name || 'রিসেপশনিস্ট'}</span> | রোগী সিরিয়াল বুকিং, তারিখ ফিল্টারিং ও রিসেপশন মনিটর
+              স্বাগতম, <span className="font-semibold text-white">{user?.name || 'রিসেপশনিস্ট ও ক্যাশিয়ার'}</span> | রোগী সিরিয়াল বুকিং, পেমেন্ট কালেকশন ও মনিটর
             </p>
           </div>
         </div>
@@ -1217,14 +1206,21 @@ function ReceptionistDashboard({
             className="px-4 py-2 bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold text-xs rounded-lg shadow-md transition flex items-center space-x-1.5"
           >
             <Plus className="w-4 h-4" />
-            <span>নতুন সিরিয়াল এন্ট্রি করুন</span>
+            <span>নতুন সিরিয়াল এন্ট্রি</span>
+          </Link>
+          <Link
+            href="/payments"
+            className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-xs rounded-lg shadow-md transition flex items-center space-x-1.5"
+          >
+            <CreditCard className="w-4 h-4" />
+            <span>পেমেন্ট ও কালেকশন</span>
           </Link>
           <Link
             href="/patients"
             className="px-3.5 py-2 bg-white/15 hover:bg-white/25 text-white font-semibold text-xs rounded-lg border border-white/20 transition flex items-center space-x-1.5"
           >
             <FileText className="w-4 h-4" />
-            <span>রোগী ও প্রেসক্রিপশন তালিকা</span>
+            <span>রোগী তালিকা</span>
           </Link>
         </div>
       </div>
@@ -1345,6 +1341,7 @@ function ReceptionistDashboard({
               <option value="Waiting">Waiting (অপেক্ষমান)</option>
               <option value="In-Progress">In-Progress (চিকিৎসাধীন)</option>
               <option value="Completed">Completed (সম্পন্ন)</option>
+              <option value="Absent">Absent (অনুপস্থিত)</option>
               <option value="Scheduled">Scheduled (শিডিউল)</option>
               <option value="Cancelled">Cancelled (বাতিল)</option>
             </select>
@@ -1530,12 +1527,15 @@ function ReceptionistDashboard({
                             ? 'bg-amber-100 text-amber-800 border-amber-300'
                             : apnt.status === 'In-Progress'
                             ? 'bg-blue-100 text-blue-800 border-blue-300'
+                            : apnt.status === 'Absent'
+                            ? 'bg-rose-100 text-rose-800 border-rose-300'
                             : 'bg-slate-100 text-slate-700 border-slate-300'
                         }`}
                       >
                         <option value="Waiting">Waiting</option>
                         <option value="In-Progress">In-Progress</option>
                         <option value="Completed">Completed</option>
+                        <option value="Absent">Absent</option>
                         <option value="Scheduled">Scheduled</option>
                         <option value="Cancelled">Cancelled</option>
                       </select>

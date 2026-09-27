@@ -6,7 +6,6 @@ import { usePathname } from 'next/navigation';
 import { 
   LayoutDashboard,
   FileText, 
-  Files, 
   Pill, 
   LayoutTemplate, 
   Calendar, 
@@ -14,22 +13,14 @@ import {
   Heading1, 
   Package, 
   Settings, 
-  Database, 
   MessageSquare,
-  RefreshCw,
-  Wifi,
-  WifiOff,
   LogOut,
   UserCheck,
   Stethoscope,
   ChevronLeft,
   ChevronRight,
-  ShieldCheck,
-  HardDrive,
-  Users,
-  Award
+  Users
 } from 'lucide-react';
-import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/db';
 
@@ -42,26 +33,22 @@ interface NavItem {
 
 const allNavItems: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
-  { name: 'Patient Management', href: '/patients', icon: <UserCheck className="w-4 h-4" />, allowedRoles: ['admin', 'receptionist'] },
-  { name: 'Prescription', href: '/prescription', icon: <FileText className="w-4 h-4" />, allowedRoles: ['admin', 'doctor', 'cashier'] },
+  { name: 'Patient Management', href: '/patients', icon: <UserCheck className="w-4 h-4" />, allowedRoles: ['admin', 'receptionist', 'cashier'] },
+  { name: 'Prescription', href: '/prescription', icon: <FileText className="w-4 h-4" />, allowedRoles: ['admin', 'doctor'] },
   { name: 'Drug DB', href: '/drugs', icon: <Pill className="w-4 h-4" />, allowedRoles: ['admin'] },
   { name: 'Template', href: '/templates', icon: <LayoutTemplate className="w-4 h-4" />, allowedRoles: ['admin'] },
   { name: 'Appointment', href: '/appointments', icon: <Calendar className="w-4 h-4" /> },
-  { name: 'Payment & Accounts', href: '/payments', icon: <CreditCard className="w-4 h-4" />, allowedRoles: ['admin', 'cashier'] },
+  { name: 'Payment & Accounts', href: '/payments', icon: <CreditCard className="w-4 h-4" />, allowedRoles: ['admin', 'receptionist', 'cashier'] },
   { name: 'Employee Management', href: '/employees', icon: <Users className="w-4 h-4" />, allowedRoles: ['admin'] },
-  { name: 'Material & Stock', href: '/materials', icon: <Package className="w-4 h-4" />, allowedRoles: ['admin', 'staff'] },
+  { name: 'Material & Stock', href: '/materials', icon: <Package className="w-4 h-4" />, allowedRoles: ['admin', 'staff', 'receptionist', 'cashier'] },
   { name: 'Header Edit', href: '/header-edit', icon: <Heading1 className="w-4 h-4" />, allowedRoles: ['admin'] },
-  { name: 'Settings', href: '/settings', icon: <Settings className="w-4 h-4" /> },
-  { name: 'Database & Sync', href: '/database', icon: <Database className="w-4 h-4" />, allowedRoles: ['admin'] },
-  { name: 'SMS Gateway', href: '/sms', icon: <MessageSquare className="w-4 h-4" />, allowedRoles: ['admin', 'receptionist'] },
+  { name: 'Settings', href: '/settings', icon: <Settings className="w-4 h-4" />, allowedRoles: ['admin', 'doctor'] },
+  { name: 'SMS Gateway', href: '/sms', icon: <MessageSquare className="w-4 h-4" />, allowedRoles: ['admin'] },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const { user, logout, isAuthenticated } = useAuth();
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
-  const [pendingCount, setPendingCount] = useState<number>(0);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<string>('');
   const [clinicLogo, setClinicLogo] = useState<string>('');
@@ -82,12 +69,6 @@ export function Sidebar() {
   useEffect(() => {
     loadBranding();
 
-    const unsubscribe = syncEngine.subscribe((status, count) => {
-      setSyncStatus(status);
-      setPendingCount(count);
-      loadBranding();
-    });
-
     const handleRefresh = () => loadBranding();
     window.addEventListener('focus', handleRefresh);
     window.addEventListener('storage', handleRefresh);
@@ -98,7 +79,6 @@ export function Sidebar() {
     }, 1000);
 
     return () => {
-      unsubscribe();
       window.removeEventListener('focus', handleRefresh);
       window.removeEventListener('storage', handleRefresh);
       clearInterval(timer);
@@ -106,6 +86,7 @@ export function Sidebar() {
   }, []);
 
   const userRole = (user?.role || 'doctor').toLowerCase();
+  const isReceptionistOrCashier = userRole.includes('receptionist') || userRole.includes('cashier');
 
   const filteredNavItems = useMemo(() => {
     return allNavItems.filter((item) => {
@@ -124,33 +105,22 @@ export function Sidebar() {
       }
 
       if (!item.allowedRoles) return true;
+      if (isReceptionistOrCashier) {
+        return item.allowedRoles.includes('receptionist') || item.allowedRoles.includes('cashier');
+      }
       return item.allowedRoles.includes(userRole);
     });
-  }, [userRole]);
+  }, [userRole, isReceptionistOrCashier]);
 
   if (!isAuthenticated) return null;
 
-  const handleManualSync = async () => {
-    setIsSyncing(true);
-    await syncEngine.triggerSync();
-    setIsSyncing(false);
-  };
-
   const getRoleLabel = (role: string) => {
-    switch (role) {
-      case 'admin':
-        return 'অ্যাডমিনিস্ট্রেটর';
-      case 'doctor':
-        return 'ডাক্তার';
-      case 'receptionist':
-        return 'রিসেপশনিস্ট';
-      case 'cashier':
-        return 'ক্যাশিয়ার';
-      case 'staff':
-        return 'ক্লিনিক স্টাফ';
-      default:
-        return role;
-    }
+    const r = (role || '').toLowerCase();
+    if (r === 'admin' || r === 'super_admin') return 'অ্যাডমিনিস্ট্রেটর';
+    if (r === 'doctor') return 'ডাক্তার';
+    if (r.includes('receptionist') || r.includes('cashier')) return 'রিসেপশনিস্ট ও ক্যাশিয়ার';
+    if (r === 'staff') return 'ক্লিনিক স্টাফ';
+    return role;
   };
 
   return (
@@ -223,7 +193,7 @@ export function Sidebar() {
                 <span className="px-1.5 py-0.2 bg-blue-800/80 rounded text-[9px] font-semibold text-yellow-300">
                   {getRoleLabel(userRole)}
                 </span>
-                <span className="text-[9px] text-slate-300">| Offline Ready</span>
+                <span className="text-[9px] text-slate-300">| Web Edition</span>
               </div>
             </div>
           </div>
@@ -262,58 +232,31 @@ export function Sidebar() {
         </nav>
       </div>
 
-      {/* 4. BOTTOM STATUS, CLOUD SYNC & LOGOUT */}
+      {/* 4. BOTTOM SYSTEM STATUS & LOGOUT */}
       <div className="p-2.5 border-t border-sky-800/30 bg-slate-950/60 space-y-2">
-        {/* Sync Status Badge */}
+        {/* System Online Badge */}
         {!isCollapsed ? (
           <div className="p-2 bg-slate-900/80 rounded-lg border border-white/10 text-xs">
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center space-x-1.5">
-                {syncStatus === 'online' ? (
-                  <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-                ) : syncStatus === 'syncing' || isSyncing ? (
-                  <RefreshCw className="w-3.5 h-3.5 text-amber-300 animate-spin" />
-                ) : (
-                  <WifiOff className="w-3.5 h-3.5 text-sky-400" />
-                )}
-                <span className="font-bold text-[11px] text-white">
-                  {syncStatus === 'online'
-                    ? 'Cloud Synced'
-                    : syncStatus === 'syncing' || isSyncing
-                    ? 'Syncing...'
-                    : 'Offline Mode'}
-                </span>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="font-bold text-[11px] text-white">MongoDB Connected</span>
               </div>
-
-              <button
-                onClick={handleManualSync}
-                disabled={isSyncing}
-                title="Sync with MongoDB"
-                className="p-1 hover:bg-white/20 rounded transition text-sky-200 disabled:opacity-50 cursor-pointer"
-              >
-                <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
-              </button>
+              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                LIVE
+              </span>
             </div>
 
             <div className="text-[10px] text-slate-400 flex justify-between font-mono">
-              <span>{pendingCount > 0 ? `${pendingCount} queue` : 'PC DB Ready'}</span>
+              <span>Web Edition</span>
               <span>{currentTime}</span>
             </div>
           </div>
         ) : (
           <div className="flex justify-center">
-            <button
-              onClick={handleManualSync}
-              disabled={isSyncing}
-              title="Sync with Cloud"
-              className="p-2 bg-slate-900 rounded-lg border border-white/10 text-sky-300 cursor-pointer"
-            >
-              {syncStatus === 'online' ? (
-                <Wifi className="w-4 h-4 text-emerald-400" />
-              ) : (
-                <WifiOff className="w-4 h-4 text-sky-400" />
-              )}
-            </button>
+            <div className="p-2 bg-slate-900 rounded-lg border border-white/10 text-emerald-400" title="MongoDB Connected (Online)">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 block animate-pulse"></span>
+            </div>
           </div>
         )}
 

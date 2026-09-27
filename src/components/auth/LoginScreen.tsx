@@ -282,12 +282,12 @@ export function LoginScreen() {
             )}
           </div>
           <h2 className="text-xl font-black tracking-tight text-white font-sans max-w-sm mx-auto leading-snug">
-            {clinicName || 'Dentist PRO 7.0'}
+            {clinicName || 'ইফরা ডেন্টাল সেন্টার'}
           </h2>
           <p className="text-xs text-sky-100 mt-1">
             {view === 'forgot'
               ? 'ইমেইল ভেরিফিকেশন ও পাসওয়ার্ড রিসেট'
-              : 'Dental Management & EMR System (Dentist PRO 7.0)'}
+              : 'Dental Management & EMR System (Web Edition)'}
           </p>
         </div>
 
@@ -352,7 +352,7 @@ export function LoginScreen() {
                     onChange={(e) => setRememberMe(e.target.checked)}
                     className="rounded text-blue-600 cursor-pointer"
                   />
-                  <span>Remember me on this PC</span>
+                  <span>Remember me on this browser</span>
                 </label>
 
                 <button

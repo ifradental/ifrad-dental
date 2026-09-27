@@ -89,10 +89,10 @@ export function Navigation() {
             🦷
           </div>
           <span className="font-bold tracking-wide text-sky-100">
-            Dentist PRO 7.0 (Desktop Edition)
+            ইফরা ডেন্টাল সেন্টার (Web Edition)
           </span>
           <span className="bg-sky-500/20 text-sky-200 text-[10px] px-2 py-0.5 rounded-full border border-sky-400/30">
-            Offline Storage Active
+            Cloud Connected
           </span>
         </div>
 
@@ -126,8 +126,8 @@ export function Navigation() {
               </span>
             ) : (
               <span className="flex items-center space-x-1 text-sky-300 font-medium">
-                <WifiOff className="w-3.5 h-3.5" />
-                <span>Offline ({pendingCount} pending)</span>
+                <Wifi className="w-3.5 h-3.5" />
+                <span>System Ready</span>
               </span>
             )}
 

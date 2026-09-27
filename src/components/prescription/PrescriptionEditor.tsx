@@ -37,13 +37,16 @@ import {
   Layers,
   ChevronLeft,
   Send,
-  Lock
+  Lock,
+  Download,
+  Loader2
 } from 'lucide-react';
 import { db, type Patient, type Prescription, type Drug, type TemplateItem, type PaymentRecord, type TreatmentSession } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { convertEnglishToBanglaDigits, convertPhoneticToBangla } from '@/lib/banglaPhonetic';
 import { checkMedXDrugInteractions } from '@/lib/medxDrugs';
 import { useAuth } from '@/context/AuthContext';
+import { PrescriptionPrintSheet } from './PrescriptionPrintSheet';
 
 interface PrescriptionEditorProps {
   initialRegNo?: number;
@@ -98,7 +101,7 @@ export function PrescriptionEditor({
   const { user } = useAuth();
   const userRole = (user?.role || '').toLowerCase();
   const isAdmin = userRole === 'admin' || userRole === 'super_admin' || userRole === 'superadmin';
-  const isCashier = userRole === 'cashier';
+  const isCashier = userRole.includes('cashier') || userRole.includes('receptionist');
   const isDoctor = userRole === 'doctor';
   const canManagePayment = isAdmin || isCashier;
 
@@ -218,6 +221,25 @@ export function PrescriptionEditor({
   const [patientPayments, setPatientPayments] = useState<PaymentRecord[]>([]);
   const [totalPaid, setTotalPaid] = useState<number>(0);
   const [totalDue, setTotalDue] = useState<number>(0);
+
+  // Treatment Journey Table State (Report Entry style)
+  const [treatmentJourneyRows, setTreatmentJourneyRows] = useState<{
+    id?: string;
+    sl: number;
+    date: string;
+    treatmentName: string;
+    beforeTreatment: string;
+    afterTreatment: string;
+    nextDate: string;
+    createdSerial?: number;
+    createdApntId?: string;
+  }[]>([
+    { sl: 1, date: new Date().toISOString().split('T')[0], treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
+    { sl: 2, date: '', treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
+    { sl: 3, date: '', treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
+  ]);
+  const [activeJourneyIndex, setActiveJourneyIndex] = useState<number | null>(null);
+  const [journeySearchQuery, setJourneySearchQuery] = useState<string>('');
 
   // Treatment Journey & Timeline State
   const [treatmentSessions, setTreatmentSessions] = useState<TreatmentSession[]>([]);
@@ -372,6 +394,48 @@ export function PrescriptionEditor({
   const [showTemplateModal, setShowTemplateModal] = useState<boolean>(false);
   const [templateModalType, setTemplateModalType] = useState<string>('drug');
   const [previewModalOpen, setPreviewModalOpen] = useState<boolean>(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
+
+  const handleDownloadPDF = async () => {
+    setIsGeneratingPdf(true);
+    try {
+      const sheet = document.getElementById('printable-prescription-sheet');
+      if (!sheet) {
+        alert('প্রেসক্রিপশন প্রিন্ট শিট পাওয়া যায়নি।');
+        return;
+      }
+
+      const html2canvas = (await import('html2canvas')).default;
+      const { jsPDF } = await import('jspdf');
+
+      const canvas = await html2canvas(sheet, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+      });
+
+      const imgData = canvas.toDataURL('image/png', 1.0);
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+        compress: true,
+      });
+
+      pdf.addImage(imgData, 'PNG', 0, 0, 210, 297, undefined, 'FAST');
+      const safePatientName = (patientName || 'Patient').replace(/[^a-zA-Z0-9_\u0980-\u09FF-]/g, '_');
+      const fileName = `Prescription_${regNo || 'Reg'}_${safePatientName}.pdf`;
+      pdf.save(fileName);
+    } catch (err) {
+      console.error('PDF Generation Error:', err);
+      alert('PDF তৈরিতে সমস্যা হয়েছে। দয়া করে "প্রিন্ট করুন" বাটন চেপে Save as PDF নির্বাচন করুন।');
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
   const [toothModalData, setToothModalData] = useState<{
     sectionKey: string;
     sectionTitle: string;
@@ -577,9 +641,12 @@ export function PrescriptionEditor({
           await loadPatientByRegNo(initialRegNo);
         } else {
           const lastPrescription = await db.prescriptions.orderBy('regNo').last();
-          if (lastPrescription) {
-            setRegNo(lastPrescription.regNo + 1);
-          }
+          const maxPrescriptionReg = lastPrescription?.regNo || 0;
+          const allPatients = await db.patients.toArray();
+          const maxPatientReg = allPatients.reduce((max, pt) => Math.max(max, pt.regNo || 0), 0);
+          const baseSettingsReg = Number(settings?.lastRegNo) || 0;
+          const defaultNextReg = Math.max(maxPrescriptionReg, maxPatientReg, baseSettingsReg) + 1;
+          setRegNo(defaultNextReg);
         }
 
         // Pre-fill patient details from appointment if provided
@@ -602,6 +669,34 @@ export function PrescriptionEditor({
       setPatientPayments(pmts);
       const sessions = await db.treatmentSessions.where('regNo').equals(Number(searchReg)).sortBy('sessionNo');
       setTreatmentSessions(sessions);
+      if (sessions && sessions.length > 0) {
+        const rows = sessions.map((s, idx) => ({
+          id: s.id,
+          sl: s.sessionNo || idx + 1,
+          date: s.date || '',
+          treatmentName: s.treatmentType || s.procedureName || '',
+          beforeTreatment: s.beforeCondition || s.symptoms || '',
+          afterTreatment: s.afterCondition || s.procedureDetails || s.treatmentResult || '',
+          nextDate: s.nextDate || '',
+        }));
+        while (rows.length < 3) {
+          rows.push({
+            sl: rows.length + 1,
+            date: '',
+            treatmentName: '',
+            beforeTreatment: '',
+            afterTreatment: '',
+            nextDate: '',
+          });
+        }
+        setTreatmentJourneyRows(rows);
+      } else {
+        setTreatmentJourneyRows([
+          { sl: 1, date: new Date().toISOString().split('T')[0], treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
+          { sl: 2, date: '', treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
+          { sl: 3, date: '', treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
+        ]);
+      }
     } catch (e) {
       console.warn('Error loading patient financials and journey:', e);
     }
@@ -884,6 +979,131 @@ export function PrescriptionEditor({
         setViewingSession(null);
       }
     }
+  };
+
+  // Treatment Journey Table Actions (Report Entry Style) & Auto Serial Booking
+  const autoCreateAppointmentForNextDate = async (
+    targetRegNo: number,
+    pName: string,
+    targetDate: string,
+    tName: string
+  ): Promise<{ serial: number; apntId: string } | null> => {
+    if (!targetDate || !targetDate.trim() || !pName.trim()) return null;
+
+    try {
+      // Check if an appointment for this patient already exists on this exact date
+      const existingPatientApnt = await db.appointments
+        .where('date')
+        .equals(targetDate.trim())
+        .filter((a) => a.regNo === Number(targetRegNo))
+        .first();
+
+      if (existingPatientApnt) {
+        return { serial: existingPatientApnt.serial, apntId: existingPatientApnt.id };
+      }
+
+      // Compute next serial for this date
+      const allOnDate = await db.appointments.where('date').equals(targetDate.trim()).toArray();
+      const maxSerial = allOnDate.reduce((max, a) => Math.max(max, a.serial || 0), 0);
+      const nextSerial = maxSerial + 1;
+
+      const newApnt: any = {
+        id: `apnt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        regNo: Number(targetRegNo),
+        name: pName,
+        age: age || 'N/A',
+        sex: sex || 'M',
+        mobile: mobile || '',
+        address: address || '',
+        problem: `Treatment Follow-up: ${tName || 'Next Session'}`,
+        doctorId: clinicSettings?.doctor1?.name || 'ডা. নাহিদ হাসান',
+        doctorName: clinicSettings?.doctor1?.name || 'ডা. নাহিদ হাসান',
+        date: targetDate.trim(),
+        time: '10:00 AM',
+        paid: 0,
+        visitFee: Number(clinicSettings?.revisitFee) || 0,
+        reference: 'Treatment Journey',
+        status: 'Scheduled',
+        serial: nextSerial,
+        apntNo: `#${nextSerial}`,
+        createdAt: new Date().toISOString(),
+        prescriptionId: initialPrescriptionId || undefined,
+      };
+
+      await db.appointments.put(newApnt);
+      await syncEngine.logMutation('appointments', 'INSERT', newApnt.id, newApnt);
+
+      setWorkflowNotice(`"${targetDate.trim()}" তারিখের জন্য রোগী ${pName}-এর অ্যাপয়েন্টমেন্ট সিরিয়াল #${nextSerial} তৈরি হয়েছে!`);
+      return { serial: nextSerial, apntId: newApnt.id };
+    } catch (err) {
+      console.warn('Auto appointment creation error:', err);
+      return null;
+    }
+  };
+
+  const handleJourneyRowChange = (index: number, field: string, value: string) => {
+    const updated: any = [...treatmentJourneyRows];
+    updated[index] = {
+      ...updated[index],
+      [field]: value,
+    };
+    setTreatmentJourneyRows(updated);
+  };
+
+  const handleJourneyNextDateChange = async (index: number, nextDateVal: string) => {
+    const updated = [...treatmentJourneyRows];
+    const currentRow = updated[index];
+    updated[index] = {
+      ...currentRow,
+      nextDate: nextDateVal,
+    };
+    setTreatmentJourneyRows(updated);
+
+    if (nextDateVal && nextDateVal.trim() && patientName.trim()) {
+      const res = await autoCreateAppointmentForNextDate(
+        regNo,
+        patientName,
+        nextDateVal.trim(),
+        currentRow.treatmentName
+      );
+      if (res) {
+        updated[index].createdSerial = res.serial;
+        updated[index].createdApntId = res.apntId;
+        setTreatmentJourneyRows([...updated]);
+      }
+    }
+  };
+
+  const handleAddJourneyRow = () => {
+    setTreatmentJourneyRows((prev) => [
+      ...prev,
+      {
+        sl: prev.length + 1,
+        date: new Date().toISOString().split('T')[0],
+        treatmentName: '',
+        beforeTreatment: '',
+        afterTreatment: '',
+        nextDate: '',
+      },
+    ]);
+  };
+
+  const handleClearJourneyRow = async (index: number) => {
+    const rowToDelete = treatmentJourneyRows[index];
+    if (rowToDelete.id) {
+      await db.treatmentSessions.delete(rowToDelete.id);
+      await syncEngine.logMutation('treatmentSessions' as any, 'DELETE', rowToDelete.id, { id: rowToDelete.id });
+    }
+    const updated = [...treatmentJourneyRows];
+    updated[index] = {
+      sl: index + 1,
+      date: '',
+      treatmentName: '',
+      beforeTreatment: '',
+      afterTreatment: '',
+      nextDate: '',
+    };
+    setTreatmentJourneyRows(updated);
   };
 
   // Medicine Grid Actions
@@ -1224,6 +1444,12 @@ export function PrescriptionEditor({
     await db.prescriptions.put(prescriptionData);
     await syncEngine.logMutation('prescriptions', initialPrescriptionId ? 'UPDATE' : 'INSERT', prescriptionId, prescriptionData);
 
+    // Keep settings lastRegNo synchronized with latest registered patient
+    if (Number(regNo) >= (clinicSettings?.lastRegNo || 0)) {
+      await db.settings.update('default_settings', { lastRegNo: Number(regNo) });
+      setClinicSettings((prev) => prev ? { ...prev, lastRegNo: Number(regNo) } : prev);
+    }
+
     // If payment made, record in Payments table
     if (paidToday > 0 && canManagePayment) {
       const paymentRecord = {
@@ -1243,6 +1469,39 @@ export function PrescriptionEditor({
       };
       await db.payments.put(paymentRecord);
       await syncEngine.logMutation('payments', 'INSERT', paymentRecord.id, paymentRecord);
+    }
+
+    // Save Treatment Journey Rows to db.treatmentSessions & auto-schedule appointments
+    for (const row of treatmentJourneyRows) {
+      if (
+        (row.treatmentName && row.treatmentName.trim()) ||
+        (row.beforeTreatment && row.beforeTreatment.trim()) ||
+        (row.afterTreatment && row.afterTreatment.trim()) ||
+        (row.nextDate && row.nextDate.trim())
+      ) {
+        const sessionId = row.id || `session_${regNo}_${row.sl}_${Date.now()}`;
+        const sessionRecord: TreatmentSession = {
+          id: sessionId,
+          regNo: Number(regNo),
+          sessionNo: row.sl,
+          date: row.date || date,
+          treatmentType: row.treatmentName.trim() || 'Dental Treatment',
+          teeth: [],
+          status: 'Completed',
+          beforeCondition: row.beforeTreatment.trim(),
+          afterCondition: row.afterTreatment.trim(),
+          procedureDetails: row.afterTreatment.trim(),
+          nextDate: row.nextDate.trim(),
+          createdAt: new Date().toISOString(),
+        };
+        await db.treatmentSessions.put(sessionRecord);
+        await syncEngine.logMutation('treatmentSessions' as any, row.id ? 'UPDATE' : 'INSERT', sessionId, sessionRecord);
+
+        // Ensure appointment is booked if nextDate is provided
+        if (row.nextDate && row.nextDate.trim()) {
+          await autoCreateAppointmentForNextDate(regNo, patientName, row.nextDate.trim(), row.treatmentName);
+        }
+      }
     }
 
     // 3. Auto-save & Learn Custom Clinical Inputs into Templates Hub
@@ -1402,7 +1661,11 @@ export function PrescriptionEditor({
   const handleResetForm = async () => {
     const freshTemplates = await db.templates.toArray();
     setAllTemplates(freshTemplates);
-    setRegNo((prev) => prev + 1);
+    const lastRx = await db.prescriptions.orderBy('regNo').last();
+    const maxPrescriptionReg = lastRx?.regNo || 0;
+    const baseSettingsReg = clinicSettings?.lastRegNo || 0;
+    const nextReg = Math.max(maxPrescriptionReg, baseSettingsReg, regNo) + 1;
+    setRegNo(nextReg);
     setPatientName('');
     setAge('');
     setSex('M');
@@ -1740,7 +2003,8 @@ export function PrescriptionEditor({
   };
 
   return (
-    <div className={`p-2 max-w-[1550px] mx-auto text-slate-800 ${previewModalOpen ? 'no-print' : ''}`}>
+    <>
+      <div className={`p-2 max-w-[1550px] mx-auto text-slate-800 ${previewModalOpen ? 'no-print' : ''}`}>
       {/* TOP PATIENT BAR & ACTION BUTTONS */}
       <div className="bg-sky-50 border border-sky-200 rounded-lg p-2.5 mb-2 shadow-sm no-print">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3436,6 +3700,207 @@ export function PrescriptionEditor({
             </div>
           </div>
 
+          {/* SECTION 2 — TREATMENT JOURNEY (Report Entry Style Table with Auto Appointment Booking) */}
+          <div className="relative mb-2">
+            <div className="bg-white rounded border border-blue-400 overflow-hidden shadow-sm text-xs">
+              <div className="flex items-center justify-between py-1 px-2.5 bg-[#d5e4f2] border-b border-slate-300">
+                <div className="flex items-center space-x-2">
+                  <Activity className="w-4 h-4 text-blue-700" />
+                  <span className="font-bold text-slate-900 text-sm">
+                    Treatment Journey (চিকিৎসা সেশন ও পরবর্তী সিরিয়াল)
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={handleAddJourneyRow}
+                    className="px-2.5 py-0.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded text-[11px] font-bold flex items-center space-x-1 shadow-xs cursor-pointer transition"
+                    title="নতুন ট্রিটমেন্ট সেশন রো যোগ করুন"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>+ Add Session</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Table Column Headers */}
+              <div className="grid grid-cols-12 bg-[#0088cc] text-white font-bold text-[11px] py-1 px-1 text-center items-center gap-1">
+                <div className="col-span-1">SL / X</div>
+                <div className="col-span-2">Date</div>
+                <div className="col-span-3">Treatment Name</div>
+                <div className="col-span-2">Before Treatment</div>
+                <div className="col-span-2">After Treatment</div>
+                <div className="col-span-2">Next Date (Auto Serial)</div>
+              </div>
+
+              {/* Table Rows */}
+              <div className="divide-y divide-slate-200 bg-[#f7f9fc]">
+                {treatmentJourneyRows.map((row, idx) => {
+                  const isFocused = activeJourneyIndex === idx;
+                  const q = (journeySearchQuery ?? row.treatmentName ?? '').trim().toLowerCase();
+
+                  const matchedTreatmentTemplates = isFocused
+                    ? allTemplates
+                        .filter(
+                          (t) =>
+                            t.type === 'treatment' ||
+                            t.type === 'treatment_auto' ||
+                            t.type === 'plan_auto' ||
+                            t.type === 'cost'
+                        )
+                        .filter((t) => {
+                          if (!q) return true;
+                          return (
+                            t.name.toLowerCase().includes(q) ||
+                            (t.content && t.content.toLowerCase().includes(q))
+                          );
+                        })
+                        .sort((a, b) => (b.count || 0) - (a.count || 0))
+                        .slice(0, 10)
+                    : [];
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`grid grid-cols-12 items-center gap-1 p-1 ${
+                        isFocused ? 'relative z-20' : 'relative z-10'
+                      }`}
+                    >
+                      {/* SL & Clear / Delete */}
+                      <div className="col-span-1 flex items-center justify-center space-x-1">
+                        <button
+                          type="button"
+                          onClick={() => handleClearJourneyRow(idx)}
+                          className="w-4 h-4 border border-slate-300 bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded flex items-center justify-center font-bold text-[10px] cursor-pointer"
+                          title="Clear / Delete Session"
+                        >
+                          x
+                        </button>
+                        <span className="font-bold text-slate-700 text-[11px]">{row.sl}</span>
+                      </div>
+
+                      {/* Date */}
+                      <div className="col-span-2">
+                        <input
+                          type="date"
+                          value={row.date}
+                          onChange={(e) => handleJourneyRowChange(idx, 'date', e.target.value)}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[11px] bg-white font-sans focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      {/* Treatment Name with Live Suggestions */}
+                      <div className="col-span-3 relative">
+                        <input
+                          type="text"
+                          value={row.treatmentName}
+                          onFocus={() => {
+                            setActiveJourneyIndex(idx);
+                            setJourneySearchQuery(row.treatmentName);
+                          }}
+                          onClick={() => {
+                            setActiveJourneyIndex(idx);
+                            setJourneySearchQuery(row.treatmentName);
+                          }}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            handleJourneyRowChange(idx, 'treatmentName', val);
+                            setJourneySearchQuery(val);
+                            setActiveJourneyIndex(idx);
+                          }}
+                          onBlur={() => {
+                            setTimeout(() => {
+                              setActiveJourneyIndex((prev) => (prev === idx ? null : prev));
+                            }, 250);
+                          }}
+                          placeholder="e.g. RCT 1st Sitting / Scaling / Cap"
+                          className="w-full px-1.5 py-0.5 border border-slate-300 rounded text-xs bg-white font-semibold text-blue-900 focus:outline-none focus:border-blue-500"
+                        />
+
+                        {/* Suggestions Dropdown */}
+                        {isFocused && matchedTreatmentTemplates.length > 0 && (
+                          <div className="absolute left-0 top-full mt-1 w-full min-w-[280px] bg-white border-2 border-blue-500 rounded-lg shadow-2xl z-[9999] max-h-52 overflow-y-auto divide-y divide-slate-100">
+                            <div className="bg-blue-600 text-white px-2 py-0.5 text-[10px] font-bold flex justify-between items-center sticky top-0">
+                              <span>💡 চিকিৎসা সাজেশন ({matchedTreatmentTemplates.length})</span>
+                              <span className="text-blue-100 text-[9px]">Click to insert</span>
+                            </div>
+                            {matchedTreatmentTemplates.map((tmpl) => (
+                              <div
+                                key={tmpl.id}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  handleJourneyRowChange(idx, 'treatmentName', tmpl.name);
+                                  setActiveJourneyIndex(null);
+                                }}
+                                className="p-1.5 hover:bg-sky-100 cursor-pointer text-xs flex justify-between items-center text-slate-800 transition"
+                              >
+                                <span className="font-semibold text-blue-950 truncate max-w-[200px]">
+                                  {tmpl.name}
+                                </span>
+                                {tmpl.price ? (
+                                  <span className="text-[10px] bg-emerald-50 text-emerald-800 px-1 py-0.2 rounded font-bold font-mono">
+                                    ৳ {tmpl.price}
+                                  </span>
+                                ) : (
+                                  <span className="text-blue-600 font-bold text-[10px]">+ Insert</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Before Treatment */}
+                      <div className="col-span-2">
+                        <input
+                          type="text"
+                          value={row.beforeTreatment}
+                          onChange={(e) => handleJourneyRowChange(idx, 'beforeTreatment', e.target.value)}
+                          placeholder="e.g. Severe toothache / deep caries"
+                          className="w-full px-1.5 py-0.5 border border-slate-300 rounded text-[11px] bg-white text-slate-700 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      {/* After Treatment */}
+                      <div className="col-span-2">
+                        <input
+                          type="text"
+                          value={row.afterTreatment}
+                          onChange={(e) => handleJourneyRowChange(idx, 'afterTreatment', e.target.value)}
+                          placeholder="e.g. Canal opened, Ca(OH)2 dressed"
+                          className="w-full px-1.5 py-0.5 border border-slate-300 rounded text-[11px] bg-white text-slate-700 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      {/* Next Date (Auto Serial & Appointment creation) */}
+                      <div className="col-span-2 relative flex items-center">
+                        <input
+                          type="date"
+                          value={row.nextDate}
+                          onChange={(e) => handleJourneyNextDateChange(idx, e.target.value)}
+                          className={`w-full px-1 py-0.5 border rounded text-[11px] font-semibold focus:outline-none ${
+                            row.nextDate
+                              ? 'border-emerald-500 bg-emerald-50 text-emerald-950 font-bold'
+                              : 'border-slate-300 bg-white text-slate-700'
+                          }`}
+                          title="তারিখ সিলেক্ট করা মাত্রই ওই তারিখের জন্য রোগীর সিরিয়াল স্বয়ংক্রিয়ভাবে তৈরি হবে"
+                        />
+                        {row.createdSerial ? (
+                          <span
+                            className="absolute right-1 text-[9px] bg-emerald-700 text-white font-extrabold px-1.5 py-0.2 rounded shadow-xs"
+                            title={`Appointment Serial #${row.createdSerial} Created`}
+                          >
+                            #{row.createdSerial}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           {/* SECTION 1 — PAYMENT ENTRY (পেমেন্ট ও লেজার) */}
           <div className="bg-gradient-to-b from-[#f0f6fc] to-[#e4eff9] border border-[#b2d2ec] rounded-lg p-3 shadow-sm text-xs mb-3">
             <div className="flex flex-wrap justify-between items-center pb-2 mb-2.5 border-b border-[#c8ddf0]">
@@ -3694,281 +4159,6 @@ export function PrescriptionEditor({
                       ))}
                     </tbody>
                   </table>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* SECTION 2 — TREATMENT JOURNEY (Patient Treatment Timeline & Progress) */}
-          <div className="bg-gradient-to-b from-indigo-50/70 to-slate-50 border border-indigo-200 rounded-lg p-3 shadow-sm text-xs mb-3">
-            <div className="flex flex-wrap justify-between items-center pb-2.5 mb-2.5 border-b border-indigo-200">
-              <div className="flex items-center space-x-2">
-                <div className="w-7 h-7 rounded-md bg-indigo-600 text-white flex items-center justify-center font-bold shadow-sm">
-                  <Activity className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-baseline space-x-1.5">
-                    <h3 className="font-bold text-slate-900 text-sm">Treatment Journey</h3>
-                    <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded">
-                      Patient Treatment Timeline & Progress
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-slate-500">
-                    Comprehensive multi-appointment dental treatment tracker across dates
-                  </span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleOpenAddSessionModal}
-                className="mt-1 sm:mt-0 px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded font-bold text-xs shadow-xs transition-colors flex items-center space-x-1"
-              >
-                <span>+ Add Treatment Session</span>
-              </button>
-            </div>
-
-            {/* TREATMENT OVERVIEW METRICS */}
-            {(() => {
-              const totalSessionsCount = treatmentSessions.length;
-              const completedCount = treatmentSessions.filter(
-                (s) => (s.status || '').toLowerCase() === 'completed'
-              ).length;
-              const upcomingCount = treatmentSessions.filter(
-                (s) =>
-                  (s.status || '').toLowerCase() !== 'completed' &&
-                  (s.status || '').toLowerCase() !== 'cancelled'
-              ).length;
-              const progressPct =
-                totalSessionsCount > 0
-                  ? Math.round((completedCount / totalSessionsCount) * 100)
-                  : 0;
-
-              // Find earliest and latest dates
-              const sortedSessions = [...treatmentSessions].sort((a, b) =>
-                (a.date || '').localeCompare(b.date || '')
-              );
-              const startDate =
-                sortedSessions.length > 0 && sortedSessions[0].date
-                  ? sortedSessions[0].date
-                  : date || 'N/A';
-              const latestNextDate = sortedSessions.find((s) => s.nextDate)?.nextDate;
-              const expectedCompletion =
-                latestNextDate ||
-                (sortedSessions.length > 0 ? sortedSessions[sortedSessions.length - 1].date : 'TBD');
-
-              return (
-                <div className="bg-white rounded-lg border border-indigo-100 p-2.5 shadow-xs mb-3">
-                  <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 text-center">
-                    <div className="bg-slate-50 p-2 rounded border border-slate-100">
-                      <span className="text-[10px] text-slate-500 font-semibold uppercase block">Treatment Start</span>
-                      <span className="text-xs font-bold text-slate-800">{startDate}</span>
-                    </div>
-
-                    <div className="bg-slate-50 p-2 rounded border border-slate-100">
-                      <span className="text-[10px] text-slate-500 font-semibold uppercase block">Expected End</span>
-                      <span className="text-xs font-bold text-indigo-900">{expectedCompletion}</span>
-                    </div>
-
-                    <div className="bg-blue-50/70 p-2 rounded border border-blue-100">
-                      <span className="text-[10px] text-blue-700 font-semibold uppercase block">Total Sessions</span>
-                      <span className="text-sm font-extrabold text-blue-900">{totalSessionsCount}</span>
-                    </div>
-
-                    <div className="bg-emerald-50/70 p-2 rounded border border-emerald-100">
-                      <span className="text-[10px] text-emerald-700 font-semibold uppercase block">Completed</span>
-                      <span className="text-sm font-extrabold text-emerald-800">{completedCount}</span>
-                    </div>
-
-                    <div className="bg-amber-50/70 p-2 rounded border border-amber-100">
-                      <span className="text-[10px] text-amber-700 font-semibold uppercase block">Upcoming</span>
-                      <span className="text-sm font-extrabold text-amber-900">{upcomingCount}</span>
-                    </div>
-
-                    <div className="bg-indigo-50/70 p-2 rounded border border-indigo-100 flex flex-col justify-center">
-                      <div className="flex justify-between items-center mb-1 text-[10px] font-bold text-indigo-900">
-                        <span>Progress</span>
-                        <span>{progressPct}%</span>
-                      </div>
-                      <div className="w-full bg-indigo-200 rounded-full h-2 overflow-hidden">
-                        <div
-                          className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
-                          style={{ width: `${progressPct}%` }}
-                        ></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* TREATMENT TIMELINE */}
-            <div className="bg-white rounded-lg border border-indigo-100 p-3 shadow-xs">
-              <div className="text-[11px] font-bold text-slate-800 mb-3 flex items-center justify-between">
-                <span>Treatment Sessions & Timeline (ক্রমানুসারে সকল সেশন)</span>
-                <span className="text-[10px] text-slate-500">Chronological Order</span>
-              </div>
-
-              {treatmentSessions.length === 0 ? (
-                <div className="py-6 text-center text-slate-400 italic text-[11px] border border-dashed border-slate-200 rounded-lg">
-                  <Activity className="w-6 h-6 mx-auto mb-1 text-slate-300" />
-                  এখনও কোন চিকিৎসা সেশন (Treatment Session) যুক্ত করা হয়নি।
-                  <div className="mt-2">
-                    <button
-                      type="button"
-                      onClick={handleOpenAddSessionModal}
-                      className="px-3 py-1 bg-indigo-600 text-white rounded text-[11px] font-bold hover:bg-indigo-700 transition-colors"
-                    >
-                      + প্রথম সেশন যুক্ত করুন
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="relative pl-6 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-indigo-200 space-y-4">
-                  {[...treatmentSessions]
-                    .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
-                    .map((sess, idx) => {
-                      const statusColor =
-                        sess.status === 'Completed'
-                          ? 'bg-emerald-500 ring-emerald-100'
-                          : sess.status === 'In Progress'
-                          ? 'bg-amber-500 ring-amber-100'
-                          : sess.status === 'Scheduled'
-                          ? 'bg-blue-500 ring-blue-100'
-                          : sess.status === 'Planned'
-                          ? 'bg-purple-500 ring-purple-100'
-                          : sess.status === 'Follow-up Required'
-                          ? 'bg-orange-500 ring-orange-100'
-                          : 'bg-slate-400 ring-slate-100';
-
-                      const badgeStyle =
-                        sess.status === 'Completed'
-                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                          : sess.status === 'In Progress'
-                          ? 'bg-amber-100 text-amber-800 border-amber-300'
-                          : sess.status === 'Scheduled'
-                          ? 'bg-blue-100 text-blue-800 border-blue-300'
-                          : sess.status === 'Planned'
-                          ? 'bg-purple-100 text-purple-800 border-purple-300'
-                          : sess.status === 'Follow-up Required'
-                          ? 'bg-orange-100 text-orange-800 border-orange-300'
-                          : 'bg-slate-100 text-slate-700 border-slate-300';
-
-                      return (
-                        <div key={sess.id || idx} className="relative group">
-                          {/* TIMELINE BULLET */}
-                          <div
-                            className={`absolute -left-[23px] top-3 w-3.5 h-3.5 rounded-full ${statusColor} ring-4 border-2 border-white shadow-xs`}
-                          ></div>
-
-                          {/* COMPACT TREATMENT SESSION CARD */}
-                          <div className="bg-slate-50/70 hover:bg-indigo-50/40 transition-colors border border-slate-200 hover:border-indigo-300 rounded-lg p-2.5 shadow-xs">
-                            <div className="flex flex-wrap items-center justify-between gap-1 mb-1.5">
-                              <div className="flex items-center space-x-2">
-                                <span className="font-extrabold text-indigo-900 text-xs tracking-wide uppercase">
-                                  Session {sess.sessionNo < 10 ? `0${sess.sessionNo}` : sess.sessionNo}
-                                </span>
-                                <span className="text-slate-400">•</span>
-                                <span className="font-bold text-slate-800 text-[11px]">{sess.date}</span>
-                                {sess.time && (
-                                  <span className="text-slate-500 text-[10px]">({sess.time})</span>
-                                )}
-                              </div>
-
-                              <div className="flex items-center space-x-1.5">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${badgeStyle}`}>
-                                  {sess.status}
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-12 gap-2 text-[11px] mb-2">
-                              <div className="col-span-12 sm:col-span-6 font-bold text-blue-900 flex items-center gap-1.5">
-                                <Stethoscope className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                                <span>{sess.treatmentType || sess.procedureName || 'Dental Procedure'}</span>
-                              </div>
-
-                              <div className="col-span-12 sm:col-span-6 text-slate-700 flex items-center sm:justify-end gap-1">
-                                <span className="font-semibold text-slate-500">Tooth:</span>
-                                {sess.teeth && sess.teeth.length > 0 ? (
-                                  <div className="flex flex-wrap gap-1">
-                                    {sess.teeth.map((t) => (
-                                      <span
-                                        key={t}
-                                        className="bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-mono font-bold text-[10px] border border-blue-200"
-                                      >
-                                        #{t}
-                                      </span>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <span className="text-slate-400 italic">None specified</span>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* COMPACT BEFORE / TREATMENT / AFTER HIGHLIGHTS */}
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 bg-white p-2 rounded border border-slate-100 text-[10px] mb-2">
-                              <div>
-                                <span className="font-bold text-slate-500 block uppercase">Before:</span>
-                                <p className="text-slate-700 line-clamp-1">
-                                  {sess.beforeCondition || sess.symptoms || sess.diagnosis || 'Initial status recorded'}
-                                </p>
-                              </div>
-                              <div>
-                                <span className="font-bold text-blue-600 block uppercase">Treatment:</span>
-                                <p className="text-slate-800 line-clamp-1">
-                                  {sess.procedureDetails || sess.procedureName || 'Procedure performed'}
-                                </p>
-                              </div>
-                              <div>
-                                <span className="font-bold text-emerald-600 block uppercase">After:</span>
-                                <p className="text-slate-700 line-clamp-1">
-                                  {sess.afterCondition || sess.treatmentResult || 'Tolerated procedure well'}
-                                </p>
-                              </div>
-                            </div>
-
-                            <div className="flex flex-wrap items-center justify-between pt-1 border-t border-slate-200/60 text-[10px]">
-                              <div className="text-slate-500">
-                                <span>Doctor: <strong className="text-slate-700">{sess.doctor || 'Staff Doctor'}</strong></span>
-                                {sess.nextTreatment && (
-                                  <span className="ml-2 text-indigo-700">
-                                    Next: <strong>{sess.nextTreatment}</strong> ({sess.nextDate || 'TBD'})
-                                  </span>
-                                )}
-                              </div>
-
-                              <div className="flex items-center space-x-1.5 mt-1 sm:mt-0">
-                                <button
-                                  type="button"
-                                  onClick={() => setViewingSession(sess)}
-                                  className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded font-bold border border-indigo-200 transition-colors"
-                                >
-                                  [ View Details ]
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditSessionModal(sess)}
-                                  className="p-1 text-slate-500 hover:text-blue-600 rounded transition-colors"
-                                  title="Edit Session"
-                                >
-                                  <Edit3 className="w-3 h-3" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteTreatmentSession(sess.id)}
-                                  className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors"
-                                  title="Delete Session"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
                 </div>
               )}
             </div>
@@ -5878,6 +6068,8 @@ export function PrescriptionEditor({
           </div>
         );
       })()}
+      </div>
+
       {previewModalOpen && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] overflow-y-auto p-2 sm:p-4 flex flex-col items-center print-modal-overlay">
           <div className="w-full max-w-4xl bg-white rounded-xl shadow-2xl border border-slate-300 print-modal-container overflow-hidden my-auto">
@@ -5892,8 +6084,22 @@ export function PrescriptionEditor({
                   </div>
                 </div>
 
-                {/* Print Action Buttons */}
+                {/* Print & PDF Action Buttons */}
                 <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={handleDownloadPDF}
+                    disabled={isGeneratingPdf}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-800 text-white rounded-lg text-xs font-bold shadow-md hover:shadow-emerald-500/20 flex items-center space-x-1.5 transition active:scale-95 cursor-pointer"
+                  >
+                    {isGeneratingPdf ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    <span>{isGeneratingPdf ? 'PDF তৈরি হচ্ছে...' : 'A4 PDF ডাউনলোড'}</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => window.print()}
@@ -6028,431 +6234,53 @@ export function PrescriptionEditor({
             </div>
 
             {/* A4 PRINTABLE PRESCRIPTION SHEET CONTAINER */}
-            <div className="bg-slate-100 p-2 sm:p-6 overflow-y-auto max-h-[calc(88vh-130px)] flex justify-center">
-              <div
-                id="printable-prescription"
-                className="w-full max-w-[210mm] min-h-[297mm] bg-white text-slate-900 font-sans p-6 sm:p-8 shadow-2xl border border-slate-300 relative flex flex-col justify-between overflow-hidden"
-                style={{
-                  paddingTop: printMode === 'without_header' ? `${printHeaderMarginCm}cm` : undefined,
+            <div className="bg-slate-100 p-2 sm:p-6 overflow-y-auto max-h-[calc(88vh-130px)] flex justify-center print-sheet-wrapper">
+              <PrescriptionPrintSheet
+                prescription={{
+                  id: initialPrescriptionId,
+                  regNo,
+                  visitNo,
+                  patientName,
+                  age,
+                  sex,
+                  date,
+                  address,
+                  occupation,
+                  mobile,
+                  medicines,
+                  cc: ccList,
+                  ho,
+                  hoCustomText,
+                  oe: oeList,
+                  ix: ixList,
+                  dd: ddList,
+                  dx: dxList,
+                  treatmentPlan: treatmentPlanList,
+                  treatmentDone: treatmentDoneList,
+                  specialNote: specialNoteList,
+                  advice: adviceList,
+                  nextVisitDate,
+                  revisitText: revisitOption,
+                  timeSlot: nextVisitTime,
                 }}
-              >
-                <div className="relative z-10 flex-1 flex flex-col justify-between">
-                  {/* CLINIC HEADER (FULL MODE ONLY) */}
-                  {printMode === 'full' && (() => {
-                    const activeClinic = clinicSettings || defaultClinicSettings;
-                    const activeDocs = [
-                      activeClinic.doctor1,
-                      activeClinic.doctor2,
-                      activeClinic.doctor3,
-                    ].filter((doc: any) => doc && doc.name && doc.name.trim() !== '');
-
-                    return (
-                      <div className="border-b-2 border-slate-800 pb-3 mb-3 bg-white">
-                        {/* Clinic Title & Logo (Borderless) */}
-                        <div className="flex items-center justify-center space-x-3 mb-2">
-                          {activeClinic.displayLogo !== false && (
-                            activeClinic.logoUrl ? (
-                              <img
-                                src={activeClinic.logoUrl}
-                                alt="Clinic Logo"
-                                className="max-h-16 max-w-[140px] object-contain"
-                              />
-                            ) : (
-                              <div className="w-10 h-10 flex items-center justify-center text-2xl text-blue-900 font-bold">
-                                🦷
-                              </div>
-                            )
-                          )}
-                          <div className="text-center">
-                            <h1 className="text-2xl font-bold text-blue-950 tracking-wide font-serif">
-                              {activeClinic.clinicName}
-                            </h1>
-                            <p className="text-[11px] text-slate-600 font-sans font-medium">
-                              একটি আধুনিক ও নির্ভরযোগ্য ডেন্টাল চিকিৎসা কেন্দ্র
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Doctors Grid */}
-                        <div
-                          className={`grid gap-2 text-center text-xs font-sans mt-2 divide-x divide-slate-300 ${
-                            activeDocs.length === 1
-                              ? 'grid-cols-1 max-w-sm mx-auto'
-                              : activeDocs.length === 2
-                              ? 'grid-cols-2 max-w-2xl mx-auto'
-                              : 'grid-cols-3'
-                          }`}
-                        >
-                          {activeDocs.map((doc: any, i: number) => (
-                            <div key={i} className="px-2">
-                              <div className="font-bold text-blue-950 text-[13px]">{doc.name}</div>
-                              {doc.degrees && <div className="text-[11px] text-slate-700">{doc.degrees}</div>}
-                              {doc.designation && <div className="text-[11px] font-semibold text-slate-800">{doc.designation}</div>}
-                              {doc.hospital && <div className="text-[10px] text-slate-600">{doc.hospital}</div>}
-                              {doc.bmdcReg && (
-                                <div className="text-[10px] font-mono text-slate-600">
-                                  বিএমডিসি রেজি: {doc.bmdcReg}
-                                </div>
-                              )}
-                              {doc.mobile && (
-                                <div className="text-[10px] font-semibold text-blue-900 mt-0.5">
-                                  মোবাইল: {doc.mobile}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* PATIENT DETAILS BANNER */}
-                  <div className="border border-slate-300 bg-slate-50/60 rounded-md p-2.5 mb-4 text-xs font-sans">
-                    <div className="grid grid-cols-12 gap-y-1.5 gap-x-2 items-center">
-                      <div className="col-span-5">
-                        <span className="text-slate-500 font-semibold">নাম / Name:</span>{' '}
-                        <span className="font-bold text-slate-900 text-[13px]">
-                          {patientName || '...........................................'}
-                        </span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className="text-slate-500 font-semibold">বয়স / Age:</span>{' '}
-                        <span className="font-semibold text-slate-900">{age || '...'} Y</span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className="text-slate-500 font-semibold">লিঙ্গ / Sex:</span>{' '}
-                        <span className="font-semibold text-slate-900">{sex}</span>
-                      </div>
-                      <div className="col-span-3 text-right">
-                        <span className="text-slate-500 font-semibold">তারিখ / Date:</span>{' '}
-                        <span className="font-bold text-slate-900">{date}</span>
-                      </div>
-                      <div className="col-span-5 truncate">
-                        <span className="text-slate-500 font-semibold">ঠিকানা / Address:</span>{' '}
-                        <span className="text-slate-800">{address || 'N/A'}</span>
-                      </div>
-                      <div className="col-span-4">
-                        <span className="text-slate-500 font-semibold">রেজি / Reg No:</span>{' '}
-                        <span className="font-bold font-mono text-blue-950 bg-blue-100/80 px-1.5 py-0.5 rounded border border-blue-200">
-                          #{regNo}
-                        </span>
-                        <span className="text-slate-500 ml-2 font-medium">ভিজিট: #{visitNo}</span>
-                      </div>
-                      <div className="col-span-3 text-right">
-                        <span className="text-slate-500 font-semibold">মোবাইল:</span>{' '}
-                        <span className="font-semibold text-slate-900">{mobile || 'N/A'}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* PRESCRIPTION 2-COLUMN MEDICAL SHEET (WATERMARK STRICTLY IN BODY) */}
-                  <div className="grid grid-cols-12 gap-5 min-h-[520px] relative">
-                    {/* WATERMARK BACKGROUND LAYER (STRICTLY IN BODY, NEVER IN HEADER) */}
-                    {printIncludeWatermark && (() => {
-                      const activeClinic = clinicSettings || defaultClinicSettings;
-                      const ws = activeClinic.watermarkSettings || {
-                        showWatermark: true,
-                        type: 'logo',
-                        text: activeClinic.clinicName || 'DENTAL CLINIC',
-                        opacity: 0.07,
-                      };
-                      const opacity = ws.opacity ?? 0.07;
-                      const logo = activeClinic.logoUrl;
-
-                      return (
-                        <div
-                          className="absolute inset-0 flex items-center justify-center pointer-events-none select-none overflow-hidden z-0"
-                          style={{ opacity }}
-                        >
-                          {ws.type === 'logo' && (
-                            logo ? (
-                              <img src={logo} alt="Watermark" className="w-80 h-80 object-contain" />
-                            ) : (
-                              <div className="w-64 h-64 rounded-full border-[8px] border-blue-950 flex items-center justify-center text-8xl font-bold text-blue-950">
-                                🦷
-                              </div>
-                            )
-                          )}
-
-                          {ws.type === 'custom_image' && ws.customImageUrl && (
-                            <img src={ws.customImageUrl} alt="Watermark" className="w-80 h-80 object-contain" />
-                          )}
-
-                          {ws.type === 'text' && (
-                            <div className="text-6xl font-extrabold uppercase font-serif tracking-widest text-blue-950 -rotate-12 whitespace-nowrap">
-                              {ws.text || activeClinic.clinicName}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-
-                    {/* LEFT CLINICAL RECORDS COLUMN (38%) */}
-                    <div className="col-span-5 border-r border-slate-300 pr-4 space-y-3 text-xs font-sans relative z-10">
-                      {/* C/C (Chief Complaints) */}
-                      {ccList.filter(Boolean).length > 0 && (
-                        <div>
-                          <div className="font-bold text-blue-950 uppercase border-b border-blue-900/30 pb-0.5 mb-1 text-[11px] flex justify-between items-center">
-                            <span>C/C (Chief Complaints)</span>
-                          </div>
-                          <div className="space-y-1 pl-1">
-                            {ccList.map((c, i) => {
-                              if (!c.trim()) return null;
-                              const quad = ccQuadrants[i];
-                              return (
-                                <div key={i} className="flex items-start justify-between text-xs text-slate-800">
-                                  <span className="flex-1 font-medium">• {c}</span>
-                                  {printIncludeQuadrant && renderToothQuadrantPrint(quad)}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* H/O (Medical History) */}
-                      {printIncludeHo &&
-                        (Object.entries(ho).some(([_, val]) => val) || hoCustomText) && (
-                          <div>
-                            <div className="font-bold text-blue-950 uppercase border-b border-blue-900/30 pb-0.5 mb-1 text-[11px]">
-                              H/O (Medical History)
-                            </div>
-                            <div className="flex flex-wrap gap-1 mt-1 pl-1">
-                              {Object.entries(ho)
-                                .filter(([_, val]) => val)
-                                .map(([key]) => (
-                                  <span
-                                    key={key}
-                                    className="text-[10px] bg-amber-50 text-amber-900 font-semibold px-1.5 py-0.5 rounded border border-amber-200"
-                                  >
-                                    {key}
-                                  </span>
-                                ))}
-                            </div>
-                            {hoCustomText && (
-                              <div className="mt-1 pl-1 text-[11px] text-slate-700 italic">
-                                {hoCustomText}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                      {/* O/E (On Examination) */}
-                      {oeList.filter(Boolean).length > 0 && (
-                        <div>
-                          <div className="font-bold text-blue-950 uppercase border-b border-blue-900/30 pb-0.5 mb-1 text-[11px] flex justify-between items-center">
-                            <span>O/E (On Examination)</span>
-                          </div>
-                          <div className="space-y-1 pl-1">
-                            {oeList.map((o, i) => {
-                              if (!o.trim()) return null;
-                              const quad = oeQuadrants[i];
-                              return (
-                                <div key={i} className="flex items-start justify-between text-xs text-slate-800">
-                                  <span className="flex-1 font-medium">• {o}</span>
-                                  {printIncludeQuadrant && renderToothQuadrantPrint(quad)}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* I/X (Investigation) */}
-                      {ixList.filter(Boolean).length > 0 && (
-                        <div>
-                          <div className="font-bold text-blue-950 uppercase border-b border-blue-900/30 pb-0.5 mb-1 text-[11px]">
-                            I/X (Investigation)
-                          </div>
-                          <ul className="list-disc list-inside space-y-0.5 text-slate-800 pl-1">
-                            {ixList.filter(Boolean).map((ix, i) => (
-                              <li key={i}>{ix}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-
-                      {/* Diagnosis (Dx) */}
-                      {dxList.filter(Boolean).length > 0 && (
-                        <div className="bg-sky-50/70 border border-sky-200 rounded p-2">
-                          <div className="font-bold text-blue-950 uppercase border-b border-sky-300 pb-0.5 mb-1 text-[11px]">
-                            Diagnosis (Dx)
-                          </div>
-                          <div className="space-y-1">
-                            {dxList.map((d, i) => {
-                              if (!d.trim()) return null;
-                              const quad = dxQuadrants[i];
-                              return (
-                                <div key={i} className="flex items-start justify-between text-xs text-blue-950 font-bold">
-                                  <span className="flex-1">• {d}</span>
-                                  {printIncludeQuadrant && renderToothQuadrantPrint(quad)}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Treatment Plan */}
-                      {treatmentPlanList.filter(Boolean).length > 0 && (
-                        <div>
-                          <div className="font-bold text-blue-950 uppercase border-b border-blue-900/30 pb-0.5 mb-1 text-[11px]">
-                            Treatment Plan
-                          </div>
-                          <div className="space-y-1 pl-1">
-                            {treatmentPlanList.map((tp, i) => {
-                              if (!tp.trim()) return null;
-                              const quad = treatmentPlanQuadrants[i];
-                              return (
-                                <div key={i} className="flex items-start justify-between text-xs text-slate-800">
-                                  <span className="flex-1">• {tp}</span>
-                                  {printIncludeQuadrant && renderToothQuadrantPrint(quad)}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Treatment Done */}
-                      {treatmentDoneList.filter(Boolean).length > 0 && (
-                        <div>
-                          <div className="font-bold text-blue-950 uppercase border-b border-blue-900/30 pb-0.5 mb-1 text-[11px]">
-                            Treatment Done
-                          </div>
-                          <div className="space-y-1 pl-1">
-                            {treatmentDoneList.map((td, i) => {
-                              if (!td.trim()) return null;
-                              const quad = treatmentDoneQuadrants[i];
-                              return (
-                                <div key={i} className="flex items-start justify-between text-xs text-slate-800">
-                                  <span className="flex-1">• {td}</span>
-                                  {printIncludeQuadrant && renderToothQuadrantPrint(quad)}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Special Note */}
-                      {specialNoteList.filter(Boolean).length > 0 && (
-                        <div>
-                          <div className="font-bold text-blue-950 uppercase border-b border-blue-900/30 pb-0.5 mb-1 text-[11px]">
-                            Special Note
-                          </div>
-                          <ul className="list-disc list-inside space-y-0.5 text-slate-700 pl-1">
-                            {specialNoteList.filter(Boolean).map((sn, i) => (
-                              <li key={i}>{sn}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* RIGHT MEDICATIONS (Rx) COLUMN (62%) */}
-                    <div className="col-span-7 space-y-4 relative z-10">
-                      <div className="flex items-center justify-between border-b-2 border-slate-800 pb-1">
-                        <span className="font-serif italic text-3xl font-bold text-blue-950 leading-none">
-                          ℞
-                        </span>
-                        <span className="text-[11px] font-sans text-slate-500 font-medium">
-                          Prescribed Medicines ({medicines.filter((m) => m.brand.trim()).length})
-                        </span>
-                      </div>
-
-                      {/* Medicines List */}
-                      <div className="space-y-3.5 pl-1">
-                        {medicines
-                          .filter((m) => m.brand.trim() !== '')
-                          .map((med, idx) => (
-                            <div key={idx} className="text-xs font-sans leading-relaxed">
-                              <div className="font-bold text-[13px] text-blue-950">
-                                {idx + 1}. {med.brand}
-                              </div>
-                              <div className="pl-4 text-slate-800 flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5 text-[11px]">
-                                {med.dose && (
-                                  <span className="font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                                    {med.dose}
-                                  </span>
-                                )}
-                                {med.instruction && (
-                                  <span className="text-slate-700">({med.instruction})</span>
-                                )}
-                                {med.duration && (
-                                  <span className="font-semibold text-purple-900">
-                                    -- {med.duration}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-
-                        {medicines.filter((m) => m.brand.trim() !== '').length === 0 && (
-                          <div className="py-6 text-center text-slate-400 text-xs italic">
-                            কোন ওষুধ প্রেসক্রাইব করা হয়নি
-                          </div>
-                        )}
-                      </div>
-
-                      {/* ADVICES */}
-                      {printIncludeAdvice && adviceList.filter(Boolean).length > 0 && (
-                        <div className="pt-3 border-t border-slate-300 text-xs font-sans">
-                          <div className="font-bold text-slate-900 mb-1 flex items-center space-x-1">
-                            <span>উপদেশাবলী (Advice):</span>
-                          </div>
-                          <ul className="list-disc list-inside space-y-0.5 text-slate-800 pl-1">
-                            {adviceList.filter(Boolean).map((adv, idx) => (
-                              <li key={idx} className="leading-snug">{adv}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-
-                      {/* NEXT VISIT / REVISIT */}
-                      {printIncludeNextVisit && revisitOption !== 'প্রয়োজন নেই' && (
-                        <div className="pt-2 text-xs font-sans">
-                          <div className="inline-block bg-sky-50 border border-sky-300 text-blue-950 px-3 py-1.5 rounded-md font-semibold">
-                            <span>পরবর্তী সাক্ষাত / Next Visit:</span>{' '}
-                            <span className="text-blue-700 font-bold">{revisitOption}</span>{' '}
-                            {nextVisitDate && <span className="font-mono text-slate-700">({nextVisitDate})</span>}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* FOOTER AREA (SIGNATURE & CLINIC DETAILS) */}
-                <div className="mt-8 pt-4 border-t border-slate-300">
-                  {/* DOCTOR SIGNATURE */}
-                  {printIncludeSignature && (
-                    <div className="flex justify-between items-end mb-4 text-xs font-sans">
-                      <div className="text-slate-400 text-[9px]">
-                        Generated by Dentist PRO EMR System • Certified Electronic Record
-                      </div>
-                      <div className="text-center">
-                        <div className="w-48 border-b-2 border-slate-800 mb-1"></div>
-                        <div className="font-bold text-slate-900 text-xs">ডাক্তারের স্বাক্ষর / Doctor's Signature</div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* CLINIC FOOTER BANNER */}
-                  {printIncludeFooter && printMode === 'full' && (() => {
-                    const activeClinic = clinicSettings || defaultClinicSettings;
-                    return (
-                      <div className="border-t border-slate-200 pt-2 text-center text-[10px] text-slate-600 font-sans leading-tight">
-                        <p>{activeClinic.footerText}</p>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
+                clinicSettings={clinicSettings}
+                printMode={printMode}
+                printHeaderMarginCm={printHeaderMarginCm}
+                printIncludeQuadrant={printIncludeQuadrant}
+                printIncludeHo={printIncludeHo}
+                printIncludeAdvice={printIncludeAdvice}
+                printIncludeNextVisit={printIncludeNextVisit}
+                printIncludeSignature={printIncludeSignature}
+                printIncludeFooter={printIncludeFooter}
+                printIncludeWatermark={printIncludeWatermark}
+                ccQuadrants={ccQuadrants}
+                oeQuadrants={oeQuadrants}
+                dxQuadrants={dxQuadrants}
+              />
             </div>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

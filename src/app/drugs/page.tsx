@@ -73,7 +73,30 @@ export default function DrugDbPage() {
   };
 
   const loadDrugs = async () => {
-    const list = await db.drugs.toArray();
+    let list = await db.drugs.toArray();
+    // Clean any test/dummy drug entries
+    const dummyIds = list.filter((d) => /dummy|sample|test drug/i.test(d.name) || /dummy|sample/i.test(d.generic)).map((d) => d.id);
+    if (dummyIds.length > 0) {
+      await db.drugs.bulkDelete(dummyIds);
+      list = list.filter((d) => !dummyIds.includes(d.id));
+    }
+
+    if (list.length < MEDX_DRUG_DATABASE.length) {
+      const formatted: Drug[] = MEDX_DRUG_DATABASE.map((item, idx) => ({
+        id: item.id || `med_${idx + 1}`,
+        name: item.name,
+        strength: item.strength || '',
+        form: item.form || 'TAB.',
+        prescriptionName: item.prescriptionName || `${item.form || 'TAB.'} ${item.name} ${item.strength || ''}`.trim(),
+        company: item.company || '',
+        generic: item.generic || '',
+        indication: item.indication || `${item.therapeuticCategory || 'Dental Medication'}`,
+        drugClass: item.drugClass || '',
+        createdAt: new Date().toISOString(),
+      }));
+      await db.drugs.bulkPut(formatted);
+      list = formatted;
+    }
     setDrugs(list);
   };
 
@@ -232,47 +255,11 @@ export default function DrugDbPage() {
               <span>Drugs Information System (Drug DB)</span>
             </h1>
             <p className="text-xs text-slate-500">
-              Manage local medicine database, brands, strengths, and generic groups (Offline & Online)
+              Manage medicine database, brands, strengths, and generic groups
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* MongoDB Live Sync Indicator */}
-            <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-slate-50 rounded-lg text-[11px] font-medium border border-slate-200 shadow-xs">
-              <span className={`w-2 h-2 rounded-full ${syncStatus === 'online' ? 'bg-emerald-500' : syncStatus === 'syncing' ? 'bg-amber-500 animate-ping' : 'bg-slate-400'}`}></span>
-              <Cloud className="w-3.5 h-3.5 text-blue-600" />
-              <span className="text-slate-700">
-                {isSyncing ? 'Syncing...' : mongoCount !== null ? `MongoDB: ${mongoCount} saved` : 'MongoDB Connected'}
-              </span>
-              {pendingCount > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-full">
-                  {pendingCount} pending
-                </span>
-              )}
-            </div>
-
-            {/* Sync Now Button */}
-            <button
-              onClick={handleManualSync}
-              disabled={isSyncing}
-              className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition disabled:opacity-50"
-              title="Sync drugs with MongoDB Atlas cloud database"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Syncing...' : 'Sync Cloud'}</span>
-            </button>
-
-            {/* Push All Local to MongoDB Button */}
-            <button
-              onClick={handlePushAllToMongo}
-              disabled={isSyncing}
-              className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-300 rounded text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition disabled:opacity-50"
-              title="Save all local medicines to MongoDB"
-            >
-              <Upload className="w-3.5 h-3.5 text-sky-600" />
-              <span>Backup All to Mongo</span>
-            </button>
-
             <button
               onClick={handleImportMedXDataset}
               className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-semibold flex items-center space-x-1.5 shadow"

@@ -12,7 +12,7 @@ export function SplashScreen() {
   useEffect(() => {
     const p1 = setTimeout(() => {
       setProgress(80);
-      setStatusText('Local Offline DB & Presets Ready...');
+      setStatusText('Connecting System Modules...');
     }, 60);
 
     const p2 = setTimeout(() => {
@@ -51,27 +51,27 @@ export function SplashScreen() {
             </div>
           </div>
           <div className="absolute -top-1 -right-1 bg-yellow-400 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-full shadow border border-yellow-200">
-            PRO 7.0
+            WEB PRO
           </div>
         </div>
 
         {/* Title and Subtitle */}
         <h1 className="text-2xl font-extrabold tracking-tight text-white font-sans">
-          Dentist <span className="text-sky-400">PRO</span>
+          ইফরা ডেন্টাল <span className="text-sky-400">সেন্টার</span>
         </h1>
         <p className="text-xs text-sky-200/80 font-medium mt-0.5">
-          Modern Dental Management & Electronic Medical Record
+          Dental Management & Electronic Medical Record System
         </p>
 
         {/* Badges */}
         <div className="flex items-center space-x-2 mt-3.5 text-[10px]">
           <span className="flex items-center space-x-1 bg-sky-500/10 text-sky-300 px-2.5 py-1 rounded-full border border-sky-400/20">
-            <HardDrive className="w-3 h-3 text-sky-400" />
-            <span>100% Offline-First</span>
+            <CheckCircle2 className="w-3 h-3 text-sky-400" />
+            <span>Web Application</span>
           </span>
           <span className="flex items-center space-x-1 bg-emerald-500/10 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-400/20">
             <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-            <span>Auto Cloud Sync</span>
+            <span>Cloud Connected</span>
           </span>
         </div>
 
@@ -92,7 +92,7 @@ export function SplashScreen() {
 
         {/* Quick Skip Button */}
         <div className="mt-6 flex items-center justify-between w-full pt-3 border-t border-slate-800 text-[10px] text-slate-500">
-          <span>Desktop Edition</span>
+          <span>Web Browser Edition</span>
           <button 
             onClick={(e) => {
               e.stopPropagation();

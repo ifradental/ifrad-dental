@@ -167,7 +167,7 @@ export interface Appointment {
   paid: number;
   visitFee?: number;
   reference?: string;
-  status: 'Scheduled' | 'Waiting' | 'In-Progress' | 'Completed' | 'Cancelled' | 'Sent to Cashier' | 'Payment Done' | string;
+  status: 'Scheduled' | 'Waiting' | 'In-Progress' | 'Completed' | 'Cancelled' | 'Absent' | 'Sent to Cashier' | 'Payment Done' | string;
   serial: number;
   apntNo: string;
   createdAt: string;
@@ -255,7 +255,7 @@ export interface ExpenseRecord {
   createdAt: string;
 }
 
-export type EmployeeRole = 'Doctor' | 'Receptionist' | 'Cashier' | 'Staff' | 'Admin';
+export type EmployeeRole = 'Doctor' | 'Receptionist' | 'Cashier' | 'Receptionist / Cashier' | 'Staff' | 'Admin';
 
 export interface Employee {
   id: string;
@@ -284,11 +284,14 @@ export interface MaterialItem {
   code: string;
   name: string;
   manufacturer: string;
+  category?: string;
   lowStockLimit: number;
   supplier: string;
   supplierMobile: string;
   currentStock: number;
   unit: string;
+  unitCost?: number;
+  sellingPrice?: number;
 }
 
 export interface StockEntry {
@@ -311,9 +314,14 @@ export interface MaterialUsage {
   materialName: string;
   date: string;
   quantity: number;
+  type?: 'usage' | 'sale' | 'damage' | string;
+  unitPrice?: number;
+  totalPrice?: number;
   patientRegNo?: number;
+  patientName?: string;
   procedure?: string;
   note?: string;
+  createdBy?: string;
   createdAt: string;
 }
 
@@ -424,7 +432,7 @@ class DentalDatabase extends Dexie {
       stockEntries: 'id, materialId, date, expiryDate',
       materialUsages: 'id, materialId, date, patientRegNo',
       settings: 'id',
-      syncQueue: 'id, collection, action, status, timestamp',
+      syncQueue: 'id, collection, action, documentId, status, timestamp',
     });
     this.version(2).stores({
       treatmentSessions: 'id, regNo, sessionNo, date, status, createdAt',
@@ -437,6 +445,9 @@ class DentalDatabase extends Dexie {
     });
     this.version(5).stores({
       appointments: 'id, regNo, doctorId, date, status, serial, createdAt',
+    });
+    this.version(6).stores({
+      syncQueue: 'id, collection, action, documentId, status, timestamp',
     });
   }
 }
@@ -747,104 +758,22 @@ export async function seedInitialDataIfNeeded() {
     await db.materials.bulkAdd(defaultMaterials);
   }
 
-  // Preload a sample patient & prescription matching the screenshot
-  const patientsCount = await db.patients.count();
-  if (patientsCount === 0) {
-    const samplePatient: Patient = {
-      id: 'p_4198',
-      regNo: 4198,
-      name: 'Al- Imran',
-      age: '30',
-      sex: 'M',
-      mobile: '01682519091',
-      address: '01 No Road Dokkhingan',
-      occupation: 'Job Holder',
-      createdAt: '2026-09-03T10:00:00.000Z',
-      updatedAt: '2026-09-03T10:00:00.000Z',
-    };
-    await db.patients.add(samplePatient);
-
-    const samplePrescription: Prescription = {
-      id: 'rx_4198_1',
-      regNo: 4198,
-      patientId: 'p_4198',
-      patientName: 'Al- Imran',
-      age: '30',
-      sex: 'M',
-      mobile: '01682519091',
-      address: '01 No Road Dokkhingan',
-      occupation: 'Job Holder',
-      date: '03/09/2026',
-      visitNo: 1,
-      cc: ['Severe toothache in lower right molar', 'Gum bleeding during brushing'],
-      ho: {
-        HTN: false,
-        DM: false,
-        Asthma: false,
-        Smoking: true,
-      },
-      hoCustomText: 'No major drug allergies reported.',
-      oe: ['Tooth 46 deep dental caries with pulp exposure'],
-      ix: ['IOPA X-Ray of 46'],
-      dd: ['Acute Irreversible Pulpitis'],
-      dx: ['Acute Apical Periodontitis with Pulpitis'],
-      treatmentPlan: ['Root Canal Treatment (RCT) in 46', 'Scaling & Root Planing'],
-      treatmentDone: ['Access cavity preparation done under LA', 'Pulp extirpation and canal dressed with Ca(OH)2'],
-      specialNote: ['Advised not to chew hard food on right side'],
-      drugHistory: ['Took Tab. Ace 500mg 2 days ago'],
-      medicines: [
-        { no: 1, brand: 'TAB. AXICEF PLUS 500mg+125mg', dose: '১+০+১', instruction: 'খাবার পর', duration: '০৫ দিন' },
-        { no: 2, brand: 'TAB. AMODIS 400mg', dose: '১+০+১', instruction: 'খাবার পর', duration: '৭ দিন' },
-        { no: 3, brand: 'TAB. ROLAC 10mg', dose: '১+০+১', instruction: 'খাবার পর ব্যথা হলে', duration: '২ দিন' },
-        { no: 4, brand: 'TAB. FINIX 20mg', dose: '১ টি সকালে ও ১ টি রাতে খাবেন', instruction: 'আহারের ৩০ মি. পূর্বে', duration: '২ দিন' },
-        { no: 5, brand: 'TAB. ROCAL D 500mg+200IU', dose: '১টি করে দুপুরে খাবেন', instruction: 'খাবার পর', duration: '৩ মাস' },
-        { no: 6, brand: 'TAB. CEVIT 250mg', dose: '১+১+১', instruction: 'খাবার পর', duration: '১০ দিন' },
-      ],
-      advice: [
-        'পরবর্তী ২৪ ঘন্টা গরম বা শক্ত খাবার খাবেন না, নরম ও ঠান্ডা খাবার খাবেন।',
-        'দিনে ৩-৪ বার কুসুম গরম পানিতে লবণ দিয়ে কুলকুচা করবেন (২৪ ঘন্টা পর থেকে)।',
-        'প্রতিদিন সকালে ও রাতে খাবারের পর নরম ব্রাশ দিয়ে আলতোভাবে দাঁত ব্রাশ করবেন।'
-      ],
-      nextVisitDate: '10/09/2026',
-      revisitText: '০৭ দিন পর পুনরায় দেখা করবেন (RCT 2nd Sitting)',
-      contract: {
-        contractNo: '1',
-        particulars: 'RCT #46 + Crown',
-        quadrant: 'Lower Right (Quadrant 4)',
-        price: 8000,
-        totalBill: 8000,
-        discountTk: 500,
-        discountPercent: 0,
-        payableAmount: 7500,
-        status: 'In-Progress'
-      },
-      payment: {
-        paidToday: 3000,
-        totalBill: 7500,
-        totalPaid: 3000,
-        totalDue: 4500
-      },
-      createdAt: '2026-09-03T10:30:00.000Z',
-      updatedAt: '2026-09-03T10:30:00.000Z',
-      synced: true,
-    };
-    await db.prescriptions.add(samplePrescription);
-
-    // Add payment entry
-    await db.payments.add({
-      id: 'pay_1',
-      regNo: 4198,
-      name: 'Al- Imran',
-      mobile: '01682519091',
-      date: '03-09-2026',
-      particulars: 'RCT 1st Installment',
-      totalBill: 7500,
-      discount: 500,
-      payableAmount: 7500,
-      paidAmount: 3000,
-      dueAmount: 4500,
-      createdAt: '2026-09-03T10:30:00.000Z'
-    });
+  // Clean up any legacy dummy sample patient or sample prescription
+  try {
+    const dummyPatient = await db.patients.get('p_4198');
+    if (dummyPatient && dummyPatient.name === 'Al- Imran') {
+      await db.patients.delete('p_4198');
+    }
+    const dummyRx = await db.prescriptions.get('rx_4198_1');
+    if (dummyRx && dummyRx.patientName === 'Al- Imran') {
+      await db.prescriptions.delete('rx_4198_1');
+    }
+    const dummyPay = await db.payments.get('pay_1');
+    if (dummyPay && dummyPay.name === 'Al- Imran') {
+      await db.payments.delete('pay_1');
+    }
+  } catch (err) {
+    console.warn('Dummy cleanup error:', err);
   }
 
   // Remove any legacy demo employees so employee data is 100% dynamic

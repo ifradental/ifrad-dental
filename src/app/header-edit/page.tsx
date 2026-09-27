@@ -273,34 +273,9 @@ export default function HeaderEditPage() {
           </div>
 
           <div className="flex items-center space-x-2">
-            {/* MongoDB Sync Status Badge */}
-            <div className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium border ${
-              mongoConnected
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                : 'bg-amber-50 text-amber-700 border-amber-200'
-            }`}>
-              <Cloud className={`w-3.5 h-3.5 ${mongoConnected ? 'text-emerald-600' : 'text-amber-500'}`} />
-              <span>{mongoConnected ? 'MongoDB Synced' : 'Checking Cloud...'}</span>
-              {pendingCount > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 bg-amber-200 text-amber-900 rounded-full text-[10px]">
-                  {pendingCount} pending
-                </span>
-              )}
-            </div>
-
-            <button
-              onClick={handleManualSync}
-              disabled={isSyncing}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-medium flex items-center space-x-1.5 border border-slate-300 transition disabled:opacity-50"
-              title="Force sync changes with MongoDB"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Syncing...' : 'Sync Cloud'}</span>
-            </button>
-
             <button
               onClick={handleSave}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold flex items-center space-x-1.5 shadow transition"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold flex items-center space-x-1.5 shadow transition cursor-pointer"
             >
               <Save className="w-4 h-4" />
               <span>Save Header & Watermark</span>
