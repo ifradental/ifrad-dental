@@ -42,6 +42,8 @@ import {
 } from '@/lib/db';
 import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
+import { logActivity } from '@/lib/activityLogger';
+import ThermalTokenModal, { printThermalReceipt } from '@/components/appointments/ThermalTokenModal';
 
 export default function AppointmentPage() {
   const router = useRouter();
@@ -63,6 +65,18 @@ export default function AppointmentPage() {
   const [viewingRx, setViewingRx] = useState<Prescription | null>(null);
   const [viewingApnt, setViewingApnt] = useState<Appointment | null>(null);
   const [isViewModalOpen, setIsViewModalOpen] = useState<boolean>(false);
+
+  // Thermal Token Modal State
+  const [tokenModalApnt, setTokenModalApnt] = useState<Appointment | null>(null);
+  const [isTokenModalOpen, setIsTokenModalOpen] = useState<boolean>(false);
+
+  // Reschedule Modal State
+  const [rescheduleApnt, setRescheduleApnt] = useState<Appointment | null>(null);
+  const [isRescheduleModalOpen, setIsRescheduleModalOpen] = useState<boolean>(false);
+  const [rescheduleDate, setRescheduleDate] = useState<string>('');
+  const [rescheduleTime, setRescheduleTime] = useState<string>('10:00 AM');
+  const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string>('');
+  const [rescheduleDoctorName, setRescheduleDoctorName] = useState<string>('');
 
   // Filters
   const [viewFilter, setViewFilter] = useState<'today' | 'upcoming' | 'absent' | 'all'>('today');
@@ -94,12 +108,28 @@ export default function AppointmentPage() {
     loadInitialData();
     checkMongoCount();
 
+    const handleRefresh = () => {
+      loadAppointments();
+      checkMongoCount();
+    };
+
+    window.addEventListener('storage', handleRefresh);
+    window.addEventListener('focus', handleRefresh);
+
     const unsub = syncEngine.subscribe((status, count) => {
       setSyncStatus(status);
       setPendingCount(count);
+      if (status === 'online' && count === 0) {
+        loadAppointments();
+        checkMongoCount();
+      }
     });
 
-    return () => unsub();
+    return () => {
+      window.removeEventListener('storage', handleRefresh);
+      window.removeEventListener('focus', handleRefresh);
+      unsub();
+    };
   }, [user]);
 
   const checkMongoCount = async () => {
@@ -169,8 +199,20 @@ export default function AppointmentPage() {
         .toArray();
       setDoctorsList(doctors);
 
-      // 2. Load settings for default visit fee
-      const settings = await db.settings.get('default_settings');
+      // 2. Load settings for dynamic clinic header & default visit fee
+      let settings = await db.settings.get('default_settings');
+      if (!settings) {
+        try {
+          const res = await fetch('/api/settings');
+          const data = await res.json();
+          if (data.success && data.settings) {
+            settings = data.settings;
+            await db.settings.put(settings);
+          }
+        } catch (e) {
+          console.warn('Notice: fallback settings fetch', e);
+        }
+      }
       if (settings) {
         setClinicSettings(settings);
         setVisitFee(settings.visitFee || 500);
@@ -219,9 +261,33 @@ export default function AppointmentPage() {
     let targetRx = rx;
     if (!targetRx && apnt.prescriptionId) {
       targetRx = await db.prescriptions.get(apnt.prescriptionId);
+      if (!targetRx) {
+        try {
+          const res = await fetch(`/api/prescriptions?id=${encodeURIComponent(apnt.prescriptionId)}`);
+          const data = await res.json();
+          if (data.success && data.prescription) {
+            targetRx = data.prescription;
+            await db.prescriptions.put(targetRx);
+          }
+        } catch (e) {
+          console.warn('Could not fetch prescription from cloud for view:', e);
+        }
+      }
     }
     if (!targetRx && apnt.regNo) {
       targetRx = await db.prescriptions.where('regNo').equals(apnt.regNo).last();
+      if (!targetRx) {
+        try {
+          const res = await fetch(`/api/prescriptions?regNo=${apnt.regNo}`);
+          const data = await res.json();
+          if (data.success && data.prescriptions && data.prescriptions.length > 0) {
+            targetRx = data.prescriptions[0];
+            await db.prescriptions.put(targetRx);
+          }
+        } catch (e) {
+          console.warn('Could not fetch prescription from cloud for view by regNo:', e);
+        }
+      }
     }
     setViewingRx(targetRx || null);
     setViewingApnt(apnt);
@@ -365,6 +431,23 @@ export default function AppointmentPage() {
         await syncEngine.logMutation('payments', 'INSERT', pmt.id, pmt);
       }
 
+      // Log Appointment Creation Activity
+      logActivity({
+        action: 'CREATE_APPOINTMENT',
+        module: 'Appointment',
+        description: `নতুন অ্যাপয়েন্টমেন্ট/সিরিয়াল তৈরি: #${nextSerial} - ${name.trim()} (${docName}, তারিখ: ${date || todayStr})`,
+        metadata: {
+          apntId: apntItem.id,
+          regNo: finalRegNo,
+          patientName: name.trim(),
+          doctorName: docName,
+          serial: nextSerial,
+          date: date || todayStr,
+          visitFee: Number(visitFee) || 0,
+        },
+        user: user || undefined,
+      });
+
       // Reset form
       setName('');
       setAge('');
@@ -374,7 +457,15 @@ export default function AppointmentPage() {
       setReference('');
       setSearchRegOrPhone('');
       await loadAppointments();
-      setSyncFeedback(`রোগী "${apntItem.name}"-এর জন্য সিরিয়াল #${nextSerial} (${docName}) সফলভাবে সংরক্ষিত ও MongoDB-তে সিঙ্ক হয়েছে!`);
+
+      // Automatically open Thermal Token Receipt preview & trigger print for patient
+      setTokenModalApnt(apntItem);
+      setIsTokenModalOpen(true);
+      setTimeout(() => {
+        printThermalReceipt(apntItem, clinicSettings, '80mm');
+      }, 350);
+
+      setSyncFeedback(`রোগী "${apntItem.name}"-এর জন্য সিরিয়াল #${nextSerial} (${docName}) সফলভাবে সংরক্ষিত হয়েছে এবং টোকেন স্লিপ প্রস্তুত!`);
       setTimeout(() => setSyncFeedback(''), 5000);
     } catch (err) {
       console.error('Failed to create appointment:', err);
@@ -395,6 +486,14 @@ export default function AppointmentPage() {
       })
         .then(() => checkMongoCount())
         .catch((e) => console.warn('Direct MongoDB patch notice:', e));
+
+      logActivity({
+        action: 'STATUS_CHANGE',
+        module: 'Appointment',
+        description: `সিরিয়াল #${updated.serial} (${updated.name}) এর স্ট্যাটাস '${newStatus}' করা হয়েছে`,
+        metadata: { apntId: id, name: updated.name, serial: updated.serial, newStatus },
+        user: user || undefined,
+      });
     }
     loadAppointments();
     setSyncFeedback(`Appointment status updated to "${newStatus}" in MongoDB!`);
@@ -410,39 +509,157 @@ export default function AppointmentPage() {
       alert('ডাক্তার রোল থেকে সিরিয়াল মোছার অনুমতি নেই!');
       return;
     }
+    const target = await db.appointments.get(id);
     if (confirm('আপনি কি এই অ্যাপয়েন্টমেন্ট রেকর্ডটি মুছে ফেলতে চান?')) {
       await db.appointments.delete(id);
       await syncEngine.logMutation('appointments', 'DELETE', id, { id });
       fetch(`/api/appointments?id=${id}`, { method: 'DELETE' })
         .then(() => checkMongoCount())
         .catch(() => {});
+
+      if (target) {
+        logActivity({
+          action: 'DELETE_APPOINTMENT',
+          module: 'Appointment',
+          description: `অ্যাপয়েন্টমেন্ট মুছে ফেলা হয়েছে: #${target.serial} (${target.name}, তারিখ: ${target.date})`,
+          metadata: { id, name: target.name, date: target.date },
+          user: user || undefined,
+        });
+      }
+
       await loadAppointments();
       setSyncFeedback('Appointment deleted from database and MongoDB.');
       setTimeout(() => setSyncFeedback(''), 3000);
     }
   };
 
+  // Open Reschedule Modal
+  const handleOpenReschedule = (apnt: Appointment) => {
+    setRescheduleApnt(apnt);
+    // Suggest tomorrow or today as default reschedule date
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    
+    setRescheduleDate(apnt.date < todayStr ? todayStr : tomorrowStr);
+    setRescheduleTime(apnt.time || '10:00 AM');
+    setRescheduleDoctorId(apnt.doctorId || '');
+    setRescheduleDoctorName(apnt.doctorName || '');
+    setIsRescheduleModalOpen(true);
+  };
+
+  // Confirm Reschedule
+  const handleConfirmReschedule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rescheduleApnt) return;
+    if (!rescheduleDate) {
+      alert('অনুগ্রহ করে নতুন অ্যাপয়েন্টমেন্ট তারিখ নির্বাচন করুন!');
+      return;
+    }
+
+    try {
+      let docName = rescheduleDoctorName || rescheduleApnt.doctorName;
+      let docId = rescheduleDoctorId || rescheduleApnt.doctorId;
+      if (rescheduleDoctorId) {
+        const matched = doctorsList.find((d) => d.id === rescheduleDoctorId);
+        if (matched) {
+          docName = matched.name;
+        }
+      }
+
+      // Compute next serial number for this doctor on this new date
+      const sameDayDoctorAppts = appointments.filter(
+        (a) => a.id !== rescheduleApnt.id && a.date === rescheduleDate && (a.doctorId === docId || a.doctorName === docName)
+      );
+      const nextSerial = sameDayDoctorAppts.length + 1;
+      const newStatus: Appointment['status'] = rescheduleDate > todayStr ? 'Scheduled' : 'Waiting';
+
+      const updated: Appointment = {
+        ...rescheduleApnt,
+        date: rescheduleDate,
+        time: rescheduleTime || '10:00 AM',
+        serial: nextSerial,
+        doctorId: docId,
+        doctorName: docName,
+        status: newStatus,
+      };
+
+      await db.appointments.put(updated);
+      await syncEngine.logMutation('appointments', 'UPDATE', updated.id, updated);
+
+      // Direct MongoDB patch
+      fetch('/api/appointments', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: updated.id,
+          date: updated.date,
+          time: updated.time,
+          serial: updated.serial,
+          doctorId: updated.doctorId,
+          doctorName: updated.doctorName,
+          status: updated.status,
+        }),
+      }).catch((err) => console.warn('Direct MongoDB patch notice on reschedule:', err));
+
+      logActivity({
+        action: 'RESCHEDULE_APPOINTMENT',
+        module: 'Appointment',
+        description: `অ্যাপয়েন্টমেন্ট পুনর্নির্ধারণ: ${rescheduleApnt.name} (${rescheduleApnt.date} থেকে নতুন তারিখ ${rescheduleDate}, সিরিয়াল #${nextSerial})`,
+        metadata: {
+          apntId: updated.id,
+          name: updated.name,
+          oldDate: rescheduleApnt.date,
+          newDate: rescheduleDate,
+          newSerial: nextSerial,
+          doctorName: docName,
+        },
+        user: user || undefined,
+      });
+
+      setIsRescheduleModalOpen(false);
+      setRescheduleApnt(null);
+      await loadAppointments();
+      await checkMongoCount();
+
+      const targetTabLabel = rescheduleDate > todayStr ? 'আসন্ন (Upcoming) তালিকায়' : 'আজকের সিরিয়াল তালিকায়';
+      setSyncFeedback(`রোগী "${updated.name}"-এর সিরিয়াল ${rescheduleDate} তারিখে নতুন সিরিয়াল #${nextSerial} (${docName}) সহ সফলভাবে রিশিডিউল করা হয়েছে এবং ${targetTabLabel} যুক্ত হয়েছে!`);
+      setTimeout(() => setSyncFeedback(''), 5000);
+    } catch (err) {
+      console.error('Failed to reschedule appointment:', err);
+      alert('সিরিয়াল রিশিডিউল করতে সমস্যা হয়েছে!');
+    }
+  };
+
   // Filtered Appointments
   const filteredAppointments = useMemo(() => {
     return appointments.filter((a) => {
-      // 1. Doctor Isolation: If logged in as Doctor, strictly show ONLY patients assigned to this doctor!
-      if (isDoctorUser) {
-        const matchesDocId = a.doctorId && user && (a.doctorId === user.employeeId || a.doctorId === (user as any).id);
-        const matchesDocName = a.doctorName && user?.name && (
-          a.doctorName.toLowerCase().includes(user.name.toLowerCase()) ||
-          user.name.toLowerCase().includes(a.doctorName.toLowerCase())
+      // 1. Doctor Filter
+      if (selectedDoctorFilter !== 'All') {
+        const matchesDocId = a.doctorId && (a.doctorId === selectedDoctorFilter || (user && a.doctorId === user.employeeId));
+        const matchesDocName = a.doctorName && (
+          a.doctorName.toLowerCase().includes(selectedDoctorFilter.toLowerCase()) ||
+          selectedDoctorFilter.toLowerCase().includes(a.doctorName.toLowerCase())
         );
-        if (!matchesDocId && !matchesDocName) return false;
-      } else if (selectedDoctorFilter !== 'All') {
-        const matchesDocId = a.doctorId && a.doctorId === selectedDoctorFilter;
-        const matchesDocName = a.doctorName && a.doctorName.toLowerCase().includes(selectedDoctorFilter.toLowerCase());
         if (!matchesDocId && !matchesDocName) return false;
       }
 
       // 2. Date & Status Filter
-      if (viewFilter === 'today' && a.date !== todayStr) return false;
-      if (viewFilter === 'upcoming' && a.date < todayStr) return false;
-      if (viewFilter === 'absent' && a.status !== 'Absent') return false;
+      if (viewFilter === 'today') {
+        if (a.date !== todayStr) return false;
+      }
+      
+      if (viewFilter === 'upcoming') {
+        // Strictly future dates (excluding today)
+        if (a.date <= todayStr) return false;
+      }
+      
+      if (viewFilter === 'absent') {
+        // Appointments explicitly marked as Absent, or past dates without completed prescription
+        const isPastUnattended = a.date < todayStr && a.status !== 'Completed' && !a.prescriptionId;
+        const isExplicitAbsent = a.status === 'Absent';
+        if (!isPastUnattended && !isExplicitAbsent) return false;
+      }
 
       // 3. Search Query
       if (searchQuery.trim()) {
@@ -456,24 +673,18 @@ export default function AppointmentPage() {
 
       return true;
     });
-  }, [appointments, isDoctorUser, user, viewFilter, selectedDoctorFilter, searchQuery, todayStr]);
+  }, [appointments, user, viewFilter, selectedDoctorFilter, searchQuery, todayStr]);
 
   // Metrics
   const metrics = useMemo(() => {
     const list = appointments.filter((a) => {
-      if (isDoctorUser) {
-        const matchesDocId = a.doctorId && user && (a.doctorId === user.employeeId || a.doctorId === (user as any).id);
-        const matchesDocName = a.doctorName && user?.name && (
-          a.doctorName.toLowerCase().includes(user.name.toLowerCase()) ||
-          user.name.toLowerCase().includes(a.doctorName.toLowerCase())
+      if (selectedDoctorFilter !== 'All') {
+        const matchesDocId = a.doctorId && (a.doctorId === selectedDoctorFilter || (user && a.doctorId === user.employeeId));
+        const matchesDocName = a.doctorName && (
+          a.doctorName.toLowerCase().includes(selectedDoctorFilter.toLowerCase()) ||
+          selectedDoctorFilter.toLowerCase().includes(a.doctorName.toLowerCase())
         );
         return matchesDocId || matchesDocName;
-      }
-      if (selectedDoctorFilter !== 'All') {
-        return (
-          (a.doctorId && a.doctorId === selectedDoctorFilter) ||
-          (a.doctorName && a.doctorName.toLowerCase().includes(selectedDoctorFilter.toLowerCase()))
-        );
       }
       return true;
     });
@@ -481,10 +692,18 @@ export default function AppointmentPage() {
     const todayList = list.filter((a) => a.date === todayStr);
     const waiting = todayList.filter((a) => a.status === 'Waiting').length;
     const completed = todayList.filter((a) => a.status === 'Completed').length;
+    const absentToday = todayList.filter((a) => a.status === 'Absent').length;
+    // Absent Total includes past unattended appointments + explicitly Absent appointments
+    const absentTotal = list.filter((a) => a.status === 'Absent' || (a.date < todayStr && a.status !== 'Completed' && !a.prescriptionId)).length;
+    const upcomingTotal = list.filter((a) => a.date > todayStr).length;
+
     return {
       todayTotal: todayList.length,
       waiting,
       completed,
+      absentToday,
+      absentTotal,
+      upcomingTotal,
       allTotal: list.length,
     };
   }, [appointments, isDoctorUser, user, selectedDoctorFilter, todayStr]);
@@ -537,9 +756,15 @@ export default function AppointmentPage() {
         </div>
       )}
 
-      {/* METRICS CARDS */}
-      <div className="grid grid-cols-12 gap-3 text-xs">
-        <div className="col-span-6 sm:col-span-3 bg-white border border-slate-200 rounded-xl p-3 shadow-xs">
+      {/* METRICS CARDS (5 RESPONSIVE CARDS) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
+        {/* 1. Today Total */}
+        <div 
+          onClick={() => setViewFilter('today')}
+          className={`bg-white border rounded-xl p-3 shadow-xs transition cursor-pointer hover:border-blue-400 ${
+            viewFilter === 'today' ? 'border-blue-500 ring-1 ring-blue-400' : 'border-slate-200'
+          }`}
+        >
           <div className="flex items-center justify-between text-slate-500 mb-1">
             <span className="font-semibold">আজকের মোট সিরিয়াল</span>
             <div className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
@@ -550,7 +775,8 @@ export default function AppointmentPage() {
           <div className="text-[11px] text-slate-400 mt-0.5">তারিখ: {todayStr}</div>
         </div>
 
-        <div className="col-span-6 sm:col-span-3 bg-white border border-slate-200 rounded-xl p-3 shadow-xs">
+        {/* 2. Waiting */}
+        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 mb-1">
             <span className="font-semibold">অপেক্ষমান রোগী (Waiting)</span>
             <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
@@ -561,7 +787,8 @@ export default function AppointmentPage() {
           <div className="text-[11px] text-amber-600 font-medium mt-0.5">চেম্বারে ডাকার অপেক্ষায়</div>
         </div>
 
-        <div className="col-span-6 sm:col-span-3 bg-white border border-slate-200 rounded-xl p-3 shadow-xs">
+        {/* 3. Completed */}
+        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 mb-1">
             <span className="font-semibold">চিকিৎসা সম্পন্ন (Completed)</span>
             <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg">
@@ -572,7 +799,32 @@ export default function AppointmentPage() {
           <div className="text-[11px] text-emerald-600 font-medium mt-0.5">প্রেসক্রিপশন সম্পন্ন</div>
         </div>
 
-        <div className="col-span-6 sm:col-span-3 bg-white border border-slate-200 rounded-xl p-3 shadow-xs">
+        {/* 4. Absent Patients (NEW CARD) */}
+        <div 
+          onClick={() => setViewFilter('absent')}
+          className={`bg-white border rounded-xl p-3 shadow-xs transition cursor-pointer hover:border-rose-400 ${
+            viewFilter === 'absent' ? 'border-rose-500 ring-1 ring-rose-400 bg-rose-50/20' : 'border-slate-200'
+          }`}
+        >
+          <div className="flex items-center justify-between text-slate-500 mb-1">
+            <span className="font-semibold text-rose-950">অনুপস্থিত রোগী (Absent)</span>
+            <div className="p-1.5 bg-rose-50 text-rose-600 rounded-lg">
+              <XCircle className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold font-mono text-rose-600">{metrics.absentToday} জন</div>
+          <div className="text-[11px] text-rose-500 font-medium mt-0.5">
+            মোট অনুপস্থিত: {metrics.absentTotal} জন
+          </div>
+        </div>
+
+        {/* 5. All Total */}
+        <div 
+          onClick={() => setViewFilter('all')}
+          className={`bg-white border rounded-xl p-3 shadow-xs transition cursor-pointer hover:border-purple-400 ${
+            viewFilter === 'all' ? 'border-purple-500 ring-1 ring-purple-400' : 'border-slate-200'
+          }`}
+        >
           <div className="flex items-center justify-between text-slate-500 mb-1">
             <span className="font-semibold">সর্বমোট অ্যাপয়েন্টমেন্ট</span>
             <div className="p-1.5 bg-purple-50 text-purple-600 rounded-lg">
@@ -838,7 +1090,7 @@ export default function AppointmentPage() {
               viewFilter === 'today' ? 'bg-blue-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
             }`}
           >
-            আজকের সিরিয়াল ({appointments.filter((a) => a.date === todayStr).length})
+            আজকের সিরিয়াল ({metrics.todayTotal})
           </button>
           <button
             onClick={() => setViewFilter('upcoming')}
@@ -846,7 +1098,7 @@ export default function AppointmentPage() {
               viewFilter === 'upcoming' ? 'bg-blue-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
             }`}
           >
-            আসন্ন (Upcoming)
+            আসন্ন (Upcoming) ({metrics.upcomingTotal})
           </button>
           <button
             onClick={() => setViewFilter('absent')}
@@ -862,7 +1114,7 @@ export default function AppointmentPage() {
                 viewFilter === 'absent' ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-800'
               }`}
             >
-              {appointments.filter((a) => a.status === 'Absent').length}
+              {metrics.absentTotal}
             </span>
           </button>
           <button
@@ -871,36 +1123,36 @@ export default function AppointmentPage() {
               viewFilter === 'all' ? 'bg-blue-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
             }`}
           >
-            সব ({appointments.length})
+            সব ({metrics.allTotal})
           </button>
         </div>
 
-        {/* Doctor Filter Dropdown or Locked Indicator */}
-        {isDoctorUser ? (
-          <div className="flex items-center space-x-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 font-bold text-xs">
-            <Stethoscope className="w-3.5 h-3.5 text-blue-600" />
-            <span>নির্ধারিত চেম্বার কিউ: {user?.name}</span>
-          </div>
-        ) : (
-          <div className="flex items-center space-x-2">
-            <span className="font-semibold text-slate-700 flex items-center gap-1">
-              <Filter className="w-3.5 h-3.5 text-blue-600" />
-              <span>ডাক্তার ফিল্টার:</span>
-            </span>
-            <select
-              value={selectedDoctorFilter}
-              onChange={(e) => setSelectedDoctorFilter(e.target.value)}
-              className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-bold text-slate-900 text-xs focus:outline-none focus:border-blue-600"
-            >
-              <option value="All">সকল ডাক্তার (All Doctors)</option>
-              {doctorsList.map((doc) => (
+        {/* Doctor Filter Dropdown */}
+        <div className="flex items-center space-x-2">
+          <span className="font-semibold text-slate-700 flex items-center gap-1">
+            <Filter className="w-3.5 h-3.5 text-blue-600" />
+            <span>ডাক্তার ফিল্টার:</span>
+          </span>
+          <select
+            value={selectedDoctorFilter}
+            onChange={(e) => setSelectedDoctorFilter(e.target.value)}
+            className={`px-2.5 py-1.5 border rounded-lg font-bold text-xs focus:outline-none focus:border-blue-600 ${
+              isDoctorUser ? 'border-blue-300 bg-blue-50/80 text-blue-950' : 'border-slate-300 bg-white text-slate-900'
+            }`}
+          >
+            {isDoctorUser && (
+              <option value={user?.employeeId || user?.name}>আমার চেম্বার কিউ (ডা. {user?.name})</option>
+            )}
+            <option value="All">সকল ডাক্তার (All Doctors Queue)</option>
+            {doctorsList
+              .filter((doc) => !isDoctorUser || (doc.name !== user?.name && doc.id !== user?.employeeId))
+              .map((doc) => (
                 <option key={doc.id} value={doc.id}>
                   {doc.name}
                 </option>
               ))}
-            </select>
-          </div>
-        )}
+          </select>
+        </div>
 
         {/* Search Input */}
         <div className="relative">
@@ -922,6 +1174,7 @@ export default function AppointmentPage() {
             <thead className="bg-sky-50 text-slate-800 font-bold border-b border-sky-100">
               <tr>
                 <th className="p-3 w-16 text-center">সিরিয়াল</th>
+                <th className="p-3 w-28 text-center font-mono">রেজি. নং</th>
                 <th className="p-3">রোগীর নাম ও পরিচয়</th>
                 <th className="p-3">যোগাযোগ</th>
                 <th className="p-3">রোগীর সমস্যা (Problem)</th>
@@ -929,13 +1182,13 @@ export default function AppointmentPage() {
                 <th className="p-3 w-28">তারিখ ও সময়</th>
                 <th className="p-3 w-24 text-right">ভিজিট ফি</th>
                 <th className="p-3 w-32 text-center">বর্তমান অবস্থা</th>
-                <th className="p-3 w-40 text-center">প্রেসক্রিপশন অ্যাকশন</th>
+                <th className="p-3 w-48 text-center">প্রেসক্রিপশন ও রিশিডিউল</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredAppointments.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-400">
+                  <td colSpan={10} className="py-12 text-center text-slate-400">
                     <CalendarIcon className="w-8 h-8 mx-auto mb-2 opacity-50 text-blue-600" />
                     কোনো অ্যাপয়েন্টমেন্ট বা সিরিয়াল পাওয়া যায়নি।
                   </td>
@@ -963,11 +1216,18 @@ export default function AppointmentPage() {
                         </span>
                       </td>
 
+                      {/* Registration Number */}
+                      <td className="p-3 text-center">
+                        <span className="px-2.5 py-1 bg-slate-100 text-blue-950 font-mono font-bold text-xs rounded-lg border border-slate-200 inline-block shadow-2xs">
+                          #{apnt.regNo || 'New'}
+                        </span>
+                      </td>
+
                       {/* Patient Name & Details */}
                       <td className="p-3">
                         <div className="font-bold text-slate-900 text-sm">{apnt.name}</div>
                         <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                          বয়স: {apnt.age || '-'} • লিঙ্গ: {apnt.sex || '-'} • Reg #{apnt.regNo || 'New'}
+                          বয়স: {apnt.age || '-'} • লিঙ্গ: {apnt.sex || '-'}
                         </div>
                       </td>
 
@@ -1046,9 +1306,34 @@ export default function AppointmentPage() {
                         </select>
                       </td>
 
-                      {/* PRESCRIPTION ACTION BUTTONS */}
+                      {/* PRESCRIPTION & TOKEN ACTION BUTTONS */}
                       <td className="p-3 text-center">
-                        <div className="flex items-center justify-center space-x-1.5">
+                        <div className="flex items-center justify-center space-x-1.5 flex-wrap gap-y-1">
+                          {/* THERMAL TOKEN PRINT BUTTON */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTokenModalApnt(apnt);
+                              setIsTokenModalOpen(true);
+                            }}
+                            className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold rounded-lg transition flex items-center space-x-1 text-[11px] shadow-2xs cursor-pointer"
+                            title="রোগীর সিরিয়াল টোকেন স্লিপ প্রিন্ট করুন"
+                          >
+                            <Printer className="w-3 h-3 text-emerald-600" />
+                            <span>টোকেন</span>
+                          </button>
+
+                          {/* RESCHEDULE BUTTON (Available for all, especially Absent/Upcoming) */}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenReschedule(apnt)}
+                            className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-300 font-bold rounded-lg transition flex items-center space-x-1 text-[11px] shadow-2xs cursor-pointer"
+                            title="নতুন তারিখে সিরিয়াল রিশিডিউল করুন"
+                          >
+                            <CalendarIcon className="w-3 h-3 text-indigo-600" />
+                            <span>রিশিডিউল</span>
+                          </button>
+
                           {!hasPrescription ? (
                             <>
                               {!isReceptionistOrCashier && (
@@ -1060,28 +1345,22 @@ export default function AppointmentPage() {
                                   )}&problem=${encodeURIComponent(apnt.problem || '')}&doctor=${encodeURIComponent(
                                     apnt.doctorName || ''
                                   )}`}
-                                  className="px-2.5 py-1.5 bg-gradient-to-r from-blue-700 to-sky-600 hover:from-blue-800 hover:to-sky-700 text-white font-bold rounded-lg shadow-xs hover:shadow transition flex items-center space-x-1 text-xs"
+                                  className="px-2.5 py-1 bg-gradient-to-r from-blue-700 to-sky-600 hover:from-blue-800 hover:to-sky-700 text-white font-bold rounded-lg shadow-xs hover:shadow transition flex items-center space-x-1 text-[11px]"
                                   title="এই রোগীর জন্য প্রেসক্রিপশন তৈরি করুন"
                                 >
-                                  <FileText className="w-3.5 h-3.5 text-yellow-300" />
-                                  <span>Make Prescription</span>
+                                  <FileText className="w-3 h-3 text-yellow-300" />
+                                  <span>Make Rx</span>
                                 </Link>
                               )}
 
                               {!isDoctorUser && !isReceptionistOrCashier && (
                                 <button
                                   onClick={() => handleDelete(apnt.id)}
-                                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
+                                  className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
                                   title="সিরিয়াল বাতিল/মুছুন"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
-                              )}
-
-                              {isReceptionistOrCashier && (
-                                <span className="text-[11px] text-slate-400 font-medium italic">
-                                  প্রেসক্রিপশন অপেক্ষমান
-                                </span>
                               )}
                             </>
                           ) : (
@@ -1090,10 +1369,10 @@ export default function AppointmentPage() {
                               <button
                                 type="button"
                                 onClick={() => handleOpenViewRx(matchingRx, apnt)}
-                                className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-300 font-bold rounded-lg transition flex items-center space-x-1 text-xs shadow-xs cursor-pointer"
+                                className="px-2 py-1 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-300 font-bold rounded-lg transition flex items-center space-x-1 text-[11px] shadow-xs cursor-pointer"
                                 title="প্রেসক্রিপশন দেখুন"
                               >
-                                <Eye className="w-3.5 h-3.5 text-sky-600" />
+                                <Eye className="w-3 h-3 text-sky-600" />
                                 <span>ভিউ</span>
                               </button>
 
@@ -1107,10 +1386,10 @@ export default function AppointmentPage() {
                                   )}&problem=${encodeURIComponent(apnt.problem || '')}&doctor=${encodeURIComponent(
                                     apnt.doctorName || ''
                                   )}`}
-                                  className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold rounded-lg transition flex items-center space-x-1 text-xs shadow-xs"
+                                  className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold rounded-lg transition flex items-center space-x-1 text-[11px] shadow-xs"
                                   title="প্রেসক্রিপশন সংশোধন / এডিট করুন"
                                 >
-                                  <Edit3 className="w-3.5 h-3.5 text-amber-700" />
+                                  <Edit3 className="w-3 h-3 text-amber-700" />
                                   <span>এডিট</span>
                                 </Link>
                               )}
@@ -1119,7 +1398,7 @@ export default function AppointmentPage() {
                               {!isDoctorUser && !isReceptionistOrCashier && (
                                 <button
                                   onClick={() => handleDelete(apnt.id)}
-                                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
+                                  className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
                                   title="সিরিয়াল মুছুন"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -1137,6 +1416,143 @@ export default function AppointmentPage() {
           </table>
         </div>
       </div>
+
+      {/* RESCHEDULE APPOINTMENT MODAL */}
+      {isRescheduleModalOpen && rescheduleApnt && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-indigo-200 w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-5 py-3.5 bg-gradient-to-r from-indigo-900 via-blue-900 to-indigo-950 text-white flex items-center justify-between border-b border-indigo-800">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 bg-indigo-600 text-white rounded-xl shadow-xs">
+                  <CalendarIcon className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">সিরিয়াল রিশিডিউল করুন</h3>
+                  <p className="text-[11px] text-indigo-200">Reschedule Patient Appointment</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsRescheduleModalOpen(false);
+                  setRescheduleApnt(null);
+                }}
+                className="p-1.5 text-indigo-300 hover:text-white hover:bg-indigo-800/50 rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleConfirmReschedule} className="p-5 space-y-3.5 text-xs">
+              {/* Patient Quick Info Card */}
+              <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-xl space-y-1">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-slate-900 text-sm">{rescheduleApnt.name}</span>
+                  <span className="font-mono font-bold text-blue-900 bg-white px-2 py-0.5 rounded border border-indigo-200">
+                    Reg #{rescheduleApnt.regNo || 'New'}
+                  </span>
+                </div>
+                <div className="text-slate-600 flex justify-between text-[11px]">
+                  <span>পূর্ববর্তী তারিখ: <strong className="font-mono text-slate-800">{rescheduleApnt.date}</strong></span>
+                  <span>মোবাইল: <strong className="font-mono text-slate-800">{rescheduleApnt.mobile}</strong></span>
+                </div>
+              </div>
+
+              {/* New Date Picker */}
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  নতুন অ্যাপয়েন্টমেন্ট তারিখ (New Date) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  min={todayStr}
+                  value={rescheduleDate}
+                  onChange={(e) => setRescheduleDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold font-mono text-slate-900 focus:outline-none focus:border-indigo-600 bg-white"
+                />
+              </div>
+
+              {/* New Time Slot */}
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  নতুন সময় / স্লট (Time Slot) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={rescheduleTime}
+                  onChange={(e) => setRescheduleTime(e.target.value)}
+                  placeholder="যেমন: 11:30 AM"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-600 bg-white"
+                />
+              </div>
+
+              {/* Doctor Selection */}
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  ডাক্তার নির্বাচন (Assign Doctor)
+                </label>
+                <select
+                  value={rescheduleDoctorId || rescheduleDoctorName}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const matched = doctorsList.find((d) => d.id === val || d.name === val);
+                    if (matched) {
+                      setRescheduleDoctorId(matched.id);
+                      setRescheduleDoctorName(matched.name);
+                    } else {
+                      setRescheduleDoctorId('');
+                      setRescheduleDoctorName(val);
+                    }
+                  }}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 bg-white focus:outline-none focus:border-indigo-600"
+                >
+                  {doctorsList.length === 0 ? (
+                    <option value={rescheduleApnt.doctorName || 'ডা. নাহিদ হাসান'}>
+                      {rescheduleApnt.doctorName || 'ডা. নাহিদ হাসান'}
+                    </option>
+                  ) : (
+                    doctorsList.map((doc) => (
+                      <option key={doc.id} value={doc.id}>
+                        {doc.name} ({doc.designation || 'ডেন্টাল সার্জন'})
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+
+              {/* Smart Auto Serial Note */}
+              <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-[11px] leading-relaxed">
+                💡 <strong>স্বয়ংক্রিয় সিরিয়াল ব্যবস্থাপনা:</strong> নির্বাচিত তারিখে ওই ডাক্তারের জন্য পরবর্তী ক্রমিক সিরিয়াল নম্বর স্বয়ংক্রিয়ভাবে নির্ধারণ করা হবে। ভবিষ্যৎ তারিখের ক্ষেত্রে এটি স্বয়ংক্রিয়ভাবে <strong>"আসন্ন (Upcoming)"</strong> ট্যাবে চলে যাবে।
+              </div>
+
+              {/* Actions */}
+              <div className="pt-2 border-t border-slate-200 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRescheduleModalOpen(false);
+                    setRescheduleApnt(null);
+                  }}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-gradient-to-r from-indigo-700 to-blue-600 hover:from-indigo-800 hover:to-blue-700 text-white rounded-xl font-bold transition shadow-sm cursor-pointer flex items-center space-x-1.5"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>রিশিডিউল নিশ্চিত করুন</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* PRESCRIPTION VIEW MODAL */}
       {isViewModalOpen && (viewingRx || viewingApnt) && (
@@ -1361,6 +1777,17 @@ export default function AppointmentPage() {
           </div>
         </div>
       )}
+
+      {/* THERMAL TOKEN MODAL & PRINT PREVIEW */}
+      <ThermalTokenModal
+        isOpen={isTokenModalOpen}
+        onClose={() => {
+          setIsTokenModalOpen(false);
+          setTokenModalApnt(null);
+        }}
+        appointment={tokenModalApnt}
+        clinicSettings={clinicSettings}
+      />
     </div>
   );
 }

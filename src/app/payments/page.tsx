@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { 
   CreditCard, 
@@ -16,18 +16,50 @@ import {
   ExternalLink, 
   Lock, 
   X,
-  UserCheck
+  UserCheck,
+  Building2,
+  ShieldCheck,
+  Check,
+  Printer,
+  Receipt,
+  Calendar,
+  AlertCircle,
+  Users,
+  Sparkles,
+  ArrowDownRight,
+  ArrowUpRight,
+  Filter,
+  CheckCircle,
+  XCircle,
+  Eye,
+  BadgeAlert
 } from 'lucide-react';
-import { db, type PaymentRecord, type ExpenseRecord, type Prescription } from '@/lib/db';
+import { 
+  db, 
+  type PaymentRecord, 
+  type ExpenseRecord, 
+  type Prescription, 
+  type CashSubmission, 
+  type ClinicSettings 
+} from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
+import { logActivity } from '@/lib/activityLogger';
+import CashSubmissionVoucherModal from '@/components/payments/CashSubmissionVoucherModal';
 
 export default function PaymentsPage() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'payments' | 'expenses' | 'summary' | 'doctor_prescriptions'>('payments');
+  const isAdmin = user?.role?.toLowerCase() === 'admin';
+  const isReceptionistOrCashier = 
+    user?.role?.toLowerCase().includes('receptionist') || 
+    user?.role?.toLowerCase().includes('cashier');
+
+  const [activeTab, setActiveTab] = useState<'payments' | 'cash_submissions' | 'doctor_prescriptions' | 'expenses' | 'summary'>('payments');
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
   const [pendingPrescriptions, setPendingPrescriptions] = useState<Prescription[]>([]);
+  const [cashSubmissions, setCashSubmissions] = useState<CashSubmission[]>([]);
+  const [clinicSettings, setClinicSettings] = useState<ClinicSettings | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Quick Collect Payment Modal State
@@ -44,23 +76,236 @@ export default function PaymentsPage() {
   const [expenseDate, setExpenseDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [expenseNote, setExpenseNote] = useState<string>('');
 
+  // Cash Submission Form State
+  const [isSubmitModalOpen, setIsSubmitModalOpen] = useState<boolean>(false);
+  const [submitCashAmount, setSubmitCashAmount] = useState<number>(0);
+  const [submitDigitalAmount, setSubmitDigitalAmount] = useState<number>(0);
+  const [submitShiftPeriod, setSubmitShiftPeriod] = useState<string>('মর্নিং শিফট (Morning Shift)');
+  const [submitDate, setSubmitDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [submitNotes, setSubmitNotes] = useState<string>('');
+
+  // Admin Approval & Voucher Modal States
+  const [selectedSubmissionForVoucher, setSelectedSubmissionForVoucher] = useState<CashSubmission | null>(null);
+  const [rejectingSubmission, setRejectingSubmission] = useState<CashSubmission | null>(null);
+  const [rejectRemarks, setRejectRemarks] = useState<string>('');
+  const [submissionFilterStatus, setSubmissionFilterStatus] = useState<string>('All');
+
   useEffect(() => {
     loadData();
   }, []);
 
   const loadData = async () => {
-    const payList = await db.payments.reverse().toArray();
-    setPayments(payList);
+    try {
+      const [payList, expList, allRx, subs, settingsList] = await Promise.all([
+        db.payments.reverse().toArray(),
+        db.expenses.reverse().toArray(),
+        db.prescriptions.reverse().toArray(),
+        db.cashSubmissions.reverse().toArray(),
+        db.settings.toArray(),
+      ]);
 
-    const expList = await db.expenses.reverse().toArray();
-    setExpenses(expList);
+      setPayments(payList);
+      setExpenses(expList);
 
-    // Load prescriptions sent to cashier by doctor
-    const allRx = await db.prescriptions.reverse().toArray();
-    const pending = allRx.filter((rx) => rx.workflowStatus === 'sent_to_cashier');
-    setPendingPrescriptions(pending);
+      const pending = allRx.filter((rx) => rx.workflowStatus === 'sent_to_cashier');
+      setPendingPrescriptions(pending);
+
+      subs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setCashSubmissions(subs);
+
+      if (settingsList.length > 0) {
+        setClinicSettings(settingsList[0]);
+      }
+    } catch (err) {
+      console.error('Failed to load payments data:', err);
+    }
   };
 
+  // Totals and KPI calculations
+  const totalCollected = useMemo(() => payments.reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0), [payments]);
+  const totalDueAmount = useMemo(() => payments.reduce((sum, p) => sum + (Number(p.dueAmount) || 0), 0), [payments]);
+  const totalExpended = useMemo(() => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0), [expenses]);
+  const netIncome = totalCollected - totalExpended;
+
+  // Cash Submission calculations
+  const approvedSubmissions = useMemo(() => cashSubmissions.filter((s) => s.status === 'Approved'), [cashSubmissions]);
+  const pendingSubmissions = useMemo(() => cashSubmissions.filter((s) => s.status === 'Pending'), [cashSubmissions]);
+  const totalApprovedAmount = useMemo(() => approvedSubmissions.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0), [approvedSubmissions]);
+  const totalPendingAmount = useMemo(() => pendingSubmissions.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0), [pendingSubmissions]);
+
+  // Unsubmitted cash balance (Total collected minus already approved and pending submissions)
+  const unsubmittedCashBalance = useMemo(() => {
+    return Math.max(0, totalCollected - totalApprovedAmount - totalPendingAmount);
+  }, [totalCollected, totalApprovedAmount, totalPendingAmount]);
+
+  // Today's specific collections
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayCollected = useMemo(() => {
+    return payments
+      .filter((p) => p.date === todayStr)
+      .reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0);
+  }, [payments, todayStr]);
+
+  // Open Cash Submission Modal
+  const handleOpenSubmitCashModal = () => {
+    setSubmitCashAmount(unsubmittedCashBalance > 0 ? unsubmittedCashBalance : 0);
+    setSubmitDigitalAmount(0);
+    setSubmitDate(new Date().toISOString().split('T')[0]);
+    setSubmitNotes('');
+    setIsSubmitModalOpen(true);
+  };
+
+  // Submit Cash Action
+  const handleSubmitCash = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const total = Number(submitCashAmount) + Number(submitDigitalAmount);
+    if (total <= 0) {
+      alert('অনুগ্রহ করে জমার পরিমাণ উল্লেখ করুন!');
+      return;
+    }
+
+    const now = new Date();
+    const subNo = `CS-${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const newSubmission: CashSubmission = {
+      id: `csub_${Date.now()}`,
+      submissionNo: subNo,
+      cashierId: user?.employeeId || user?.username,
+      cashierName: user?.name || 'Receptionist / Cashier',
+      cashierMobile: user?.mobile,
+      submissionDate: submitDate,
+      submissionTime: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+      cashAmount: Number(submitCashAmount) || 0,
+      digitalAmount: Number(submitDigitalAmount) || 0,
+      totalAmount: total,
+      shiftPeriod: submitShiftPeriod,
+      notes: submitNotes.trim(),
+      status: 'Pending',
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+
+    await db.cashSubmissions.put(newSubmission);
+    await syncEngine.logMutation('cashSubmissions', 'INSERT', newSubmission.id, newSubmission);
+
+    logActivity({
+      action: 'SUBMIT_CASH',
+      module: 'Payment',
+      description: `ক্যাশিয়ার "${newSubmission.cashierName}" অ্যাডমিনের নিকট ৳${total.toLocaleString()} ক্যাশ জমা পাঠিয়েছেন (Voucher #${subNo})`,
+      metadata: {
+        submissionNo: subNo,
+        cashAmount: newSubmission.cashAmount,
+        digitalAmount: newSubmission.digitalAmount,
+        totalAmount: total,
+        shiftPeriod: submitShiftPeriod,
+      },
+      user: user || undefined,
+    });
+
+    setIsSubmitModalOpen(false);
+    await loadData();
+    setSelectedSubmissionForVoucher(newSubmission);
+    alert(`৳${total.toLocaleString()} ক্যাশ জমার আবেদন সফলভাবে অ্যাডমিনের নিকট পাঠানো হয়েছে! (ভাউচার #${subNo})`);
+  };
+
+  // Admin Approve Submission
+  const handleApproveSubmission = async (sub: CashSubmission) => {
+    if (!confirm(`আপনি কি নিশ্চিত যে ক্যাশিয়ার "${sub.cashierName}"-এর নিকট থেকে ৳${sub.totalAmount.toLocaleString()} ক্যাশ বুঝে পেয়েছেন এবং অনুমোদন করছেন?`)) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const updated: CashSubmission = {
+      ...sub,
+      status: 'Approved',
+      approvedBy: user?.name || 'Clinic Administrator',
+      approvedById: user?.employeeId || user?.username || 'admin',
+      approvedAt: now,
+      updatedAt: now,
+    };
+
+    await db.cashSubmissions.update(sub.id, {
+      status: 'Approved',
+      approvedBy: updated.approvedBy,
+      approvedById: updated.approvedById,
+      approvedAt: now,
+      updatedAt: now,
+    });
+    await syncEngine.logMutation('cashSubmissions', 'UPDATE', sub.id, updated);
+
+    logActivity({
+      action: 'APPROVE_CASH_SUBMISSION',
+      module: 'Payment',
+      description: `অ্যাডমিন "${user?.name}" ক্যাশিয়ার "${sub.cashierName}"-এর ৳${sub.totalAmount.toLocaleString()} ক্যাশ বুঝে নিয়ে অনুমোদন করেছেন (Voucher #${sub.submissionNo})`,
+      metadata: {
+        submissionNo: sub.submissionNo,
+        cashierName: sub.cashierName,
+        totalAmount: sub.totalAmount,
+        approvedBy: updated.approvedBy,
+      },
+      user: user || undefined,
+    });
+
+    await loadData();
+    alert(`ভাউচার #${sub.submissionNo} (৳${sub.totalAmount.toLocaleString()}) সফলভাবে অনুমোদিত ও সংগৃহীত হিসেবে চিহ্নিত হয়েছে!`);
+  };
+
+  // Admin Reject Submission
+  const handleRejectSubmission = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectingSubmission) return;
+
+    const now = new Date().toISOString();
+    const updated: CashSubmission = {
+      ...rejectingSubmission,
+      status: 'Rejected',
+      adminRemarks: rejectRemarks.trim(),
+      updatedAt: now,
+    };
+
+    await db.cashSubmissions.update(rejectingSubmission.id, {
+      status: 'Rejected',
+      adminRemarks: rejectRemarks.trim(),
+      updatedAt: now,
+    });
+    await syncEngine.logMutation('cashSubmissions', 'UPDATE', rejectingSubmission.id, updated);
+
+    logActivity({
+      action: 'REJECT_CASH_SUBMISSION',
+      module: 'Payment',
+      description: `অ্যাডমিন "${user?.name}" ক্যাশিয়ার "${rejectingSubmission.cashierName}"-এর ক্যাশ জমার আবেদন বাতিল করেছেন (কারণ: ${rejectRemarks})`,
+      metadata: {
+        submissionNo: rejectingSubmission.submissionNo,
+        remarks: rejectRemarks,
+      },
+      user: user || undefined,
+    });
+
+    setRejectingSubmission(null);
+    setRejectRemarks('');
+    await loadData();
+    alert('ক্যাশ জমার আবেদন বাতিল করা হয়েছে।');
+  };
+
+  // Filtered Cash Submissions
+  const filteredSubmissions = useMemo(() => {
+    return cashSubmissions.filter((sub) => {
+      if (submissionFilterStatus !== 'All' && sub.status !== submissionFilterStatus) {
+        return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchNo = sub.submissionNo?.toLowerCase().includes(q);
+        const matchName = sub.cashierName?.toLowerCase().includes(q);
+        const matchDate = sub.submissionDate?.includes(q);
+        const matchNotes = sub.notes?.toLowerCase().includes(q);
+        if (!matchNo && !matchName && !matchDate && !matchNotes) return false;
+      }
+      return true;
+    });
+  }, [cashSubmissions, submissionFilterStatus, searchQuery]);
+
+  // Handle Add Expense
   const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!expenseParticular.trim() || !expenseAmount) return;
@@ -77,6 +322,14 @@ export default function PaymentsPage() {
 
     await db.expenses.put(expItem);
     await syncEngine.logMutation('expenses', 'INSERT', expItem.id, expItem);
+
+    logActivity({
+      action: 'ADD_EXPENSE',
+      module: 'Payment',
+      description: `ক্লিনিক খরচ এন্ট্রি: ৳${expItem.amount.toLocaleString()} (${expItem.category} - ${expItem.particular})`,
+      metadata: expItem,
+      user: user || undefined,
+    });
 
     setExpenseParticular('');
     setExpenseAmount(0);
@@ -161,6 +414,14 @@ export default function PaymentsPage() {
         await syncEngine.logMutation('appointments', 'UPDATE', matchingApnt.id, { status: 'Payment Done' });
       }
 
+      logActivity({
+        action: 'COLLECT_PAYMENT',
+        module: 'Payment',
+        description: `পেশেন্ট #${regNo} (${collectingRx.patientName}) এর জন্য ৳${amount.toLocaleString()} পেমেন্ট সংগ্রহ করা হয়েছে`,
+        metadata: { regNo, amount, method: collectMethod },
+        user: user || undefined,
+      });
+
       alert('পেমেন্ট সফলভাবে সংগ্রহ করা হয়েছে এবং প্রেসক্রিপশনটি ডাক্তারের কাছে ফেরত পাঠানো হয়েছে!');
       setCollectingRx(null);
       setCollectAmount(0);
@@ -174,27 +435,37 @@ export default function PaymentsPage() {
     }
   };
 
-  const totalCollected = payments.reduce((sum, p) => sum + (p.paidAmount || 0), 0);
-  const totalDueAmount = payments.reduce((sum, p) => sum + (p.dueAmount || 0), 0);
-  const totalExpended = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-  const netIncome = totalCollected - totalExpended;
-
   return (
-    <div className="p-3 max-w-[1550px] mx-auto text-slate-800">
-      <div className="bg-white rounded-lg border border-slate-300 shadow-sm p-4">
+    <div className="p-3 sm:p-5 max-w-[1550px] mx-auto text-slate-800 font-sans text-xs space-y-4">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-4 sm:p-5">
         {/* Top Header */}
-        <div className="flex flex-wrap items-center justify-between pb-3 mb-3 border-b border-slate-200 gap-2">
-          <div className="flex items-center space-x-2">
-            <CreditCard className="w-5 h-5 text-blue-600" />
-            <h1 className="text-base font-bold text-blue-950">Accounts, Payments & Clinic Expense</h1>
+        <div className="flex flex-wrap items-center justify-between pb-3.5 mb-3.5 border-b border-slate-200 gap-2">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 via-indigo-700 to-sky-600 text-white flex items-center justify-center shadow-md">
+              <CreditCard className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h1 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+                  Accounts &amp; Cash Management
+                </h1>
+                <span className="bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded text-[10px]">
+                  পেমেন্ট, আয়-ব্যয় ও ক্যাশ জমাদান
+                </span>
+              </div>
+              <p className="text-slate-500 text-xs">
+                Patient billing, cashier daily collections, cash submission to admin, and clinic expense ledger
+              </p>
+            </div>
           </div>
 
-          <div className="flex flex-wrap gap-1.5 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            {/* Tab: Doctor Prescriptions */}
             <button
               onClick={() => setActiveTab('doctor_prescriptions')}
-              className={`px-3 py-1.5 rounded font-bold flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition ${
                 activeTab === 'doctor_prescriptions'
-                  ? 'bg-amber-600 text-white shadow'
+                  ? 'bg-amber-600 text-white shadow-xs'
                   : 'bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100'
               }`}
             >
@@ -207,77 +478,347 @@ export default function PaymentsPage() {
               )}
             </button>
 
+            {/* Tab: Cash Submissions (NEW) */}
+            <button
+              onClick={() => setActiveTab('cash_submissions')}
+              className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition ${
+                activeTab === 'cash_submissions'
+                  ? 'bg-emerald-700 text-white shadow-xs'
+                  : 'bg-emerald-50 text-emerald-900 border border-emerald-300 hover:bg-emerald-100'
+              }`}
+            >
+              <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+              <span>ক্যাশ জমাদান ও অনুমোদন</span>
+              {pendingSubmissions.length > 0 && (
+                <span className="bg-amber-500 text-white text-[10px] px-1.5 py-0.2 rounded-full font-black animate-pulse">
+                  {pendingSubmissions.length} Pending
+                </span>
+              )}
+            </button>
+
+            {/* Tab: Payments */}
             <button
               onClick={() => setActiveTab('payments')}
-              className={`px-3 py-1.5 rounded font-bold ${
-                activeTab === 'payments' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                activeTab === 'payments' ? 'bg-blue-700 text-white shadow-xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
               Patient Payments
             </button>
+
+            {/* Tab: Expenses */}
             <button
               onClick={() => setActiveTab('expenses')}
-              className={`px-3 py-1.5 rounded font-bold ${
-                activeTab === 'expenses' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                activeTab === 'expenses' ? 'bg-blue-700 text-white shadow-xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
               Add / View Expense
             </button>
+
+            {/* Tab: Summary */}
             <button
               onClick={() => setActiveTab('summary')}
-              className={`px-3 py-1.5 rounded font-bold ${
-                activeTab === 'summary' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                activeTab === 'summary' ? 'bg-blue-700 text-white shadow-xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
-              Income & Expense Statement
+              Income &amp; Expense Summary
             </button>
           </div>
         </div>
 
-        {/* Financial KPI Widgets */}
-        <div className="grid grid-cols-12 gap-3 mb-4 text-xs">
-          <div className="col-span-6 md:col-span-3 bg-emerald-50 border border-emerald-200 rounded p-3">
-            <div className="flex items-center justify-between text-emerald-800">
-              <span className="font-semibold">Total Collections</span>
-              <TrendingUp className="w-4 h-4" />
+        {/* 5 Financial KPI Widgets */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 mb-4 text-xs">
+          <div className="bg-emerald-50/90 border border-emerald-200 rounded-xl p-3 shadow-xs">
+            <div className="flex items-center justify-between text-emerald-800 text-[10px] font-semibold uppercase">
+              <span>Total Collections</span>
+              <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
             </div>
-            <div className="text-xl font-bold font-mono text-emerald-950 mt-1">৳ {totalCollected}</div>
+            <div className="text-lg sm:text-xl font-black font-mono text-emerald-950 mt-1">
+              ৳ {totalCollected.toLocaleString()}
+            </div>
+            <span className="text-[9px] text-emerald-600 block mt-0.5">সর্বমোট সংগৃহীত বিল</span>
+          </div>
+
+          <div className="bg-amber-50/90 border border-amber-300 rounded-xl p-3 shadow-xs">
+            <div className="flex items-center justify-between text-amber-900 text-[10px] font-semibold uppercase">
+              <span>Unsubmitted Cash</span>
+              <DollarSign className="w-3.5 h-3.5 text-amber-600" />
+            </div>
+            <div className="text-lg sm:text-xl font-black font-mono text-amber-950 mt-1">
+              ৳ {unsubmittedCashBalance.toLocaleString()}
+            </div>
+            <span className="text-[9px] text-amber-700 block mt-0.5">জমা দেওয়ার বাকি ক্যাশ</span>
+          </div>
+
+          <div
+            onClick={() => setActiveTab('cash_submissions')}
+            className="bg-indigo-50/90 border border-indigo-200 rounded-xl p-3 shadow-xs cursor-pointer hover:bg-indigo-100/70 transition"
+          >
+            <div className="flex items-center justify-between text-indigo-800 text-[10px] font-semibold uppercase">
+              <span>Pending Handover</span>
+              <Clock className="w-3.5 h-3.5 text-indigo-600" />
+            </div>
+            <div className="text-lg sm:text-xl font-black font-mono text-indigo-950 mt-1 flex items-center justify-between">
+              <span>৳ {totalPendingAmount.toLocaleString()}</span>
+              {pendingSubmissions.length > 0 && (
+                <span className="text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded font-bold">
+                  {pendingSubmissions.length} টি
+                </span>
+              )}
+            </div>
+            <span className="text-[9px] text-indigo-600 block mt-0.5">অনুমোদনের অপেক্ষায়</span>
           </div>
 
           <div
             onClick={() => setActiveTab('doctor_prescriptions')}
-            className="col-span-6 md:col-span-3 bg-amber-50 border border-amber-300 rounded p-3 cursor-pointer hover:bg-amber-100/70 transition"
+            className="bg-sky-50/90 border border-sky-200 rounded-xl p-3 shadow-xs cursor-pointer hover:bg-sky-100/70 transition"
           >
-            <div className="flex items-center justify-between text-amber-900">
-              <span className="font-semibold">Pending from Doctor</span>
-              <Clock className="w-4 h-4 text-amber-600" />
+            <div className="flex items-center justify-between text-sky-800 text-[10px] font-semibold uppercase">
+              <span>Doctor Queue</span>
+              <UserCheck className="w-3.5 h-3.5 text-sky-600" />
             </div>
-            <div className="text-xl font-bold font-mono text-amber-950 mt-1 flex items-center justify-between">
+            <div className="text-lg sm:text-xl font-black font-mono text-sky-950 mt-1 flex items-center justify-between">
               <span>{pendingPrescriptions.length} Patients</span>
-              <span className="text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded font-bold">
+              <span className="text-[10px] bg-sky-200 text-sky-900 px-1.5 py-0.5 rounded font-bold">
                 Collect Bill
               </span>
             </div>
+            <span className="text-[9px] text-sky-600 block mt-0.5">ডাক্তার থেকে প্রাপ্ত প্রেসক্রিপশন</span>
           </div>
 
-          <div className="col-span-6 md:col-span-3 bg-red-50 border border-red-200 rounded p-3">
-            <div className="flex items-center justify-between text-red-800">
-              <span className="font-semibold">Total Outstanding Dues</span>
-              <DollarSign className="w-4 h-4" />
+          <div className="bg-red-50/90 border border-red-200 rounded-xl p-3 shadow-xs">
+            <div className="flex items-center justify-between text-red-800 text-[10px] font-semibold uppercase">
+              <span>Total Expenses</span>
+              <TrendingDown className="w-3.5 h-3.5 text-red-600" />
             </div>
-            <div className="text-xl font-bold font-mono text-red-950 mt-1">৳ {totalDueAmount}</div>
-          </div>
-
-          <div className="col-span-6 md:col-span-3 bg-blue-50 border border-blue-200 rounded p-3">
-            <div className="flex items-center justify-between text-blue-800">
-              <span className="font-semibold">Total Expenses</span>
-              <TrendingDown className="w-4 h-4" />
+            <div className="text-lg sm:text-xl font-black font-mono text-red-950 mt-1">
+              ৳ {totalExpended.toLocaleString()}
             </div>
-            <div className="text-xl font-bold font-mono text-blue-950 mt-1">৳ {totalExpended}</div>
+            <span className="text-[9px] text-red-600 block mt-0.5">ক্লিনিক খরচ ভাউচার</span>
           </div>
         </div>
 
+        {/* ========================================================================= */}
+        {/* TAB: CASH SUBMISSIONS & HANDOVER APPROVALS (NEW MODULE) */}
+        {/* ========================================================================= */}
+        {activeTab === 'cash_submissions' && (
+          <div className="space-y-4">
+            {/* Top Action & Summary Bar */}
+            <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border border-emerald-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-md">
+                  <DollarSign className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm">
+                    ক্যাশিয়ার জমাদান ও অ্যাডমিন অনুমোদন (Daily Cash Handover Ledger)
+                  </h3>
+                  <p className="text-slate-600 text-xs mt-0.5">
+                    রিসেপশনিস্ট/ক্যাশিয়ার সংগৃহীত ক্যাশ অ্যাডমিনের নিকট জমা প্রদান এবং ভাউচার প্রিন্ট
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={handleOpenSubmitCashModal}
+                  className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center space-x-1.5 transition-all"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Submit Cash to Admin (ক্যাশ জমা দিন)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Admin Alert for Pending Submissions */}
+            {isAdmin && pendingSubmissions.length > 0 && (
+              <div className="bg-amber-50 border-2 border-amber-400 p-3 rounded-xl flex items-center justify-between text-amber-950 text-xs animate-in fade-in">
+                <div className="flex items-center space-x-2">
+                  <BadgeAlert className="w-5 h-5 text-amber-600 shrink-0" />
+                  <div>
+                    <span className="font-bold">
+                      {pendingSubmissions.length} টি ক্যাশ জমাদানের আবেদন আপনার অনুমোদনের অপেক্ষায় রয়েছে!
+                    </span>
+                    <p className="text-[11px] text-amber-800">
+                      ক্যাশিয়ারের কাছ থেকে ক্যাশ বুঝে নিয়ে নিচে &quot;Approve &amp; Collect&quot; বাটনে চাপ দিন।
+                    </p>
+                  </div>
+                </div>
+                <span className="font-mono font-black text-amber-900 bg-amber-200 px-2 py-1 rounded">
+                  মোট: ৳ {totalPendingAmount.toLocaleString()}
+                </span>
+              </div>
+            )}
+
+            {/* Filter & Search Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+              <div className="flex items-center space-x-1">
+                {['All', 'Pending', 'Approved', 'Rejected'].map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => setSubmissionFilterStatus(st)}
+                    className={`px-3 py-1 rounded-md font-bold text-xs transition ${
+                      submissionFilterStatus === st
+                        ? 'bg-emerald-700 text-white shadow-xs'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {st === 'All' ? 'All (সকল)' : st}
+                    {st === 'Pending' && pendingSubmissions.length > 0 && (
+                      <span className="ml-1 px-1.5 py-0.2 bg-amber-400 text-slate-900 text-[10px] rounded-full font-black">
+                        {pendingSubmissions.length}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              <div className="relative min-w-[240px]">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search voucher, cashier, date..."
+                  className="w-full pl-8 pr-3 py-1 bg-white border border-slate-300 rounded text-xs focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+            </div>
+
+            {/* Submissions List Table */}
+            {filteredSubmissions.length === 0 ? (
+              <div className="p-12 text-center text-slate-400 bg-slate-50 border border-slate-200 rounded-xl">
+                কোনো ক্যাশ জমাদানের রেকর্ড পাওয়া যায়নি।
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-xs bg-white">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-700 font-bold">
+                    <tr>
+                      <th className="py-2.5 px-3">Voucher No</th>
+                      <th className="py-2.5 px-3">Date &amp; Time</th>
+                      <th className="py-2.5 px-3">Cashier Name</th>
+                      <th className="py-2.5 px-3">Shift / Period</th>
+                      <th className="py-2.5 px-3 text-right">Cash Amount</th>
+                      <th className="py-2.5 px-3 text-right">Digital / MFS</th>
+                      <th className="py-2.5 px-3 text-right">Total Submitted</th>
+                      <th className="py-2.5 px-3 text-center">Status</th>
+                      <th className="py-2.5 px-3 text-center">Approved By</th>
+                      <th className="py-2.5 px-3 text-center">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredSubmissions.map((sub) => (
+                      <tr key={sub.id} className="hover:bg-emerald-50/30 transition-colors">
+                        <td className="py-2.5 px-3 font-mono font-bold text-blue-900 whitespace-nowrap">
+                          {sub.submissionNo}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap font-medium">
+                          <div>{sub.submissionDate}</div>
+                          <div className="text-[10px] text-slate-400">{sub.submissionTime}</div>
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap font-bold text-slate-900">
+                          {sub.cashierName}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap">
+                          {sub.shiftPeriod || 'Regular'}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-800">
+                          ৳ {sub.cashAmount.toLocaleString()}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-slate-600">
+                          {sub.digitalAmount > 0 ? `৳ ${sub.digitalAmount.toLocaleString()}` : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-black text-emerald-700 text-sm whitespace-nowrap">
+                          ৳ {sub.totalAmount.toLocaleString()}
+                        </td>
+                        <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                              sub.status === 'Approved'
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : sub.status === 'Rejected'
+                                ? 'bg-red-100 text-red-800 border border-red-300'
+                                : 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse'
+                            }`}
+                          >
+                            {sub.status === 'Approved' ? (
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            ) : sub.status === 'Rejected' ? (
+                              <XCircle className="w-3 h-3 text-red-600" />
+                            ) : (
+                              <Clock className="w-3 h-3 text-amber-600" />
+                            )}
+                            <span>{sub.status === 'Approved' ? 'গৃহীত (Approved)' : sub.status === 'Rejected' ? 'বাতিল' : 'অপেক্ষমান'}</span>
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-center whitespace-nowrap text-slate-700">
+                          {sub.approvedBy ? (
+                            <div>
+                              <span className="font-semibold text-emerald-900">{sub.approvedBy}</span>
+                              {sub.approvedAt && (
+                                <div className="text-[9px] text-slate-400">
+                                  {new Date(sub.approvedAt).toLocaleDateString('bn-BD')}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic">Pending</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center space-x-1.5">
+                            {/* View Voucher Button */}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSubmissionForVoucher(sub)}
+                              className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-[11px] flex items-center gap-1 transition"
+                              title="View & Print Voucher"
+                            >
+                              <Printer className="w-3 h-3 text-slate-600" />
+                              <span>Voucher</span>
+                            </button>
+
+                            {/* Admin Approve Button */}
+                            {isAdmin && sub.status === 'Pending' && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleApproveSubmission(sub)}
+                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[11px] shadow-xs flex items-center gap-1 transition"
+                                  title="Approve & Acknowledge Cash Received"
+                                >
+                                  <Check className="w-3 h-3" />
+                                  <span>Approve</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRejectingSubmission(sub)}
+                                  className="px-2 py-1 bg-red-100 hover:bg-red-200 text-red-700 rounded font-bold text-[11px] transition"
+                                  title="Reject Submission"
+                                >
+                                  Reject
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========================================================================= */}
         {/* TAB 1: PAYMENTS LIST (Matching payment sub menu.png) */}
+        {/* ========================================================================= */}
         {activeTab === 'payments' && (
           <div className="space-y-3">
             <div className="relative">
@@ -332,10 +873,12 @@ export default function PaymentsPage() {
           </div>
         )}
 
+        {/* ========================================================================= */}
         {/* TAB 2: EXPENSES ENTRY (Matching expenditure entry.png) */}
+        {/* ========================================================================= */}
         {activeTab === 'expenses' && (
           <div className="space-y-4">
-            <form onSubmit={handleAddExpense} className="bg-sky-50 border border-sky-200 rounded p-3 text-xs">
+            <form onSubmit={handleAddExpense} className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs">
               <div className="font-bold text-blue-900 mb-2">Daily Clinic Expense Voucher Entry</div>
               <div className="grid grid-cols-12 gap-2">
                 <div className="col-span-12 md:col-span-3">
@@ -345,10 +888,10 @@ export default function PaymentsPage() {
                     onChange={(e) => setExpenseCategory(e.target.value)}
                     className="w-full px-2 py-1.5 border border-slate-300 rounded bg-white"
                   >
-                    <option value="Dental Materials">Dental Materials & Medicines</option>
+                    <option value="Dental Materials">Dental Materials &amp; Medicines</option>
                     <option value="Lab Bills">Dental Lab Bills (Crown/Denture)</option>
-                    <option value="Clinic Rent & Utility">Clinic Rent & Electricity</option>
-                    <option value="Staff Salary">Staff & Assistant Salary</option>
+                    <option value="Clinic Rent & Utility">Clinic Rent &amp; Electricity</option>
+                    <option value="Staff Salary">Staff &amp; Assistant Salary</option>
                     <option value="Equipment Maintenance">Equipment Maintenance</option>
                     <option value="Others">Others</option>
                   </select>
@@ -426,7 +969,9 @@ export default function PaymentsPage() {
           </div>
         )}
 
+        {/* ========================================================================= */}
         {/* TAB 3: SUMMARY */}
+        {/* ========================================================================= */}
         {activeTab === 'summary' && (
           <div className="p-4 bg-slate-50 border border-slate-200 rounded text-xs space-y-3">
             <h3 className="font-bold text-sm text-slate-800">Monthly Financial Overview</h3>
@@ -445,7 +990,9 @@ export default function PaymentsPage() {
           </div>
         )}
 
+        {/* ========================================================================= */}
         {/* TAB 4: DOCTOR PRESCRIPTIONS PENDING PAYMENT */}
+        {/* ========================================================================= */}
         {activeTab === 'doctor_prescriptions' && (
           <div className="space-y-3">
             <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900 flex items-center justify-between">
@@ -499,13 +1046,13 @@ export default function PaymentsPage() {
                           <td className="p-2 text-right font-bold text-red-600">৳ {due}</td>
                           <td className="p-2 text-center">
                             <div className="flex items-center justify-center space-x-1.5">
-                              <button
-                                onClick={() => handleOpenCollectModal(rx)}
+                              <Link
+                                href={`/prescription?regNo=${rx.regNo}&rxId=${rx.id}&focus=payment`}
                                 className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[11px] shadow-xs flex items-center gap-1"
                               >
                                 <CreditCard className="w-3 h-3" />
                                 <span>Collect &amp; Send</span>
-                              </button>
+                              </Link>
                               <Link
                                 href={`/prescription?regNo=${rx.regNo}&rxId=${rx.id}`}
                                 className="p-1 text-slate-600 hover:text-blue-600 border border-slate-300 rounded hover:bg-slate-100"
@@ -525,7 +1072,199 @@ export default function PaymentsPage() {
           </div>
         )}
 
+        {/* ========================================================================= */}
+        {/* MODAL: SUBMIT CASH TO ADMIN (FOR RECEPTIONIST / CASHIER) */}
+        {/* ========================================================================= */}
+        {isSubmitModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 animate-in fade-in duration-150">
+            <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-300 text-xs">
+              <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-emerald-800 text-white px-5 py-3.5 flex justify-between items-center">
+                <div className="flex items-center space-x-2">
+                  <DollarSign className="w-5 h-5 text-emerald-200" />
+                  <div>
+                    <h3 className="font-extrabold text-sm">Submit Cash to Admin / ক্যাশ জমা দিন</h3>
+                    <span className="text-[10px] text-emerald-100">ক্যাশিয়ার হ্যান্ডওভার ও জমার আবেদন</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsSubmitModalOpen(false)}
+                  className="hover:bg-white/20 p-1 rounded-lg text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmitCash} className="p-5 space-y-3.5">
+                {/* Cashier Info Card */}
+                <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase font-semibold">Cashier</span>
+                    <span className="font-bold text-slate-900">{user?.name || 'Cashier'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase font-semibold">Unsubmitted Balance</span>
+                    <span className="font-bold text-amber-800 font-mono">৳ {unsubmittedCashBalance.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      নগদ টাকা (Cash Amount - ৳) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      value={submitCashAmount || ''}
+                      onChange={(e) => setSubmitCashAmount(Number(e.target.value))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border-2 border-emerald-500 rounded-lg text-sm font-bold text-right text-emerald-950 bg-emerald-50/30 focus:outline-none focus:bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      বিকাশ / ডিজিটাল (Digital MFS - ৳)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={submitDigitalAmount || ''}
+                      onChange={(e) => setSubmitDigitalAmount(Number(e.target.value))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-bold text-right text-slate-900 focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">শিফট / সময়কাল</label>
+                    <select
+                      value={submitShiftPeriod}
+                      onChange={(e) => setSubmitShiftPeriod(e.target.value)}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+                    >
+                      <option value="মর্নিং শিফট (Morning Shift)">মর্নিং শিফট (Morning Shift)</option>
+                      <option value="সান্ধ্যকালীন শিফট (Evening Shift)">সান্ধ্যকালীন শিফট (Evening Shift)</option>
+                      <option value="সারাদিনের কালেকশন (Full Day)">সারাদিনের কালেকশন (Full Day)</option>
+                      <option value="বিশেষ কালেকশন (Special Collection)">বিশেষ কালেকশন</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">জমার তারিখ</label>
+                    <input
+                      type="date"
+                      value={submitDate}
+                      onChange={(e) => setSubmitDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">বিশেষ মন্তব্য / নোট (ঐচ্ছিক)</label>
+                  <textarea
+                    rows={2}
+                    value={submitNotes}
+                    onChange={(e) => setSubmitNotes(e.target.value)}
+                    placeholder="নোট বা ব্যাংক ট্রানজেকশন রেফারেন্স লিখুন..."
+                    className="w-full p-2 border border-slate-300 rounded-lg focus:outline-none focus:border-emerald-600"
+                  />
+                </div>
+
+                <div className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-200 flex justify-between items-center text-emerald-950 font-bold">
+                  <span>সর্বমোট জমা হওয়ার পরিমাণ:</span>
+                  <span className="text-base font-black text-emerald-800">
+                    ৳ {(Number(submitCashAmount) + Number(submitDigitalAmount)).toLocaleString()}
+                  </span>
+                </div>
+
+                <div className="pt-2 flex justify-between items-center border-t border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setIsSubmitModalOpen(false)}
+                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow flex items-center space-x-1.5 transition"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>জমা দিন (Submit to Admin)</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: ADMIN REJECT REMARKS */}
+        {/* ========================================================================= */}
+        {rejectingSubmission && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 animate-in fade-in">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 text-xs">
+              <h3 className="font-bold text-sm text-red-900 mb-1 flex items-center gap-1.5">
+                <XCircle className="w-4 h-4 text-red-600" />
+                <span>ক্যাশ জমার আবেদন বাতিল করুন</span>
+              </h3>
+              <p className="text-slate-500 mb-3">
+                ভাউচার #{rejectingSubmission.submissionNo} (৳{rejectingSubmission.totalAmount.toLocaleString()})
+              </p>
+
+              <form onSubmit={handleRejectSubmission} className="space-y-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">বাতিল করার কারণ / মন্তব্য *</label>
+                  <textarea
+                    required
+                    rows={3}
+                    value={rejectRemarks}
+                    onChange={(e) => setRejectRemarks(e.target.value)}
+                    placeholder="হিসাবের অমিল বা কারণ লিখুন..."
+                    className="w-full p-2 border border-slate-300 rounded-lg focus:outline-none focus:border-red-500"
+                  />
+                </div>
+
+                <div className="flex justify-end space-x-2 pt-2 border-t">
+                  <button
+                    type="button"
+                    onClick={() => setRejectingSubmission(null)}
+                    className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 rounded font-semibold text-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded font-bold shadow"
+                  >
+                    Confirm Reject
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: CASH HANDOVER VOUCHER PRINT SLIP */}
+        {/* ========================================================================= */}
+        {selectedSubmissionForVoucher && (
+          <CashSubmissionVoucherModal
+            submission={selectedSubmissionForVoucher}
+            clinicSettings={clinicSettings}
+            onClose={() => setSelectedSubmissionForVoucher(null)}
+          />
+        )}
+
+        {/* ========================================================================= */}
         {/* QUICK COLLECT PAYMENT MODAL */}
+        {/* ========================================================================= */}
         {collectingRx && (
           <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3">
             <div className="bg-white rounded-lg border border-slate-300 shadow-xl max-w-md w-full p-4 text-xs animate-in fade-in zoom-in-95">
@@ -636,4 +1375,3 @@ export default function PaymentsPage() {
     </div>
   );
 }
-

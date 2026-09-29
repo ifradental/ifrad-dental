@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { db, seedInitialDataIfNeeded, type Employee } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
+import { logActivity } from '@/lib/activityLogger';
 
 export interface User {
   username: string;
@@ -102,6 +103,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
           setUser(loggedUser);
           localStorage.setItem('dentist_pro_user', JSON.stringify(loggedUser));
+
+          // Log Login Activity
+          logActivity({
+            action: 'LOGIN',
+            module: 'Auth',
+            description: `${loggedUser.name} (${loggedUser.designation || loggedUser.role}) সফলভাবে সিস্টেমে লগইন করেছেন`,
+            user: loggedUser,
+            metadata: { username: loggedUser.username, role: loggedUser.role },
+          });
+
           return true;
         } else {
           return false;
@@ -148,6 +159,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       setUser(loggedUser);
       localStorage.setItem('dentist_pro_user', JSON.stringify(loggedUser));
+
+      logActivity({
+        action: 'LOGIN',
+        module: 'Auth',
+        description: 'সিস্টেম অ্যাডমিনিস্ট্রেটর হিসেবে লগইন করা হয়েছে',
+        user: loggedUser,
+      });
+
       return true;
     }
 
@@ -168,6 +187,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
+    if (user) {
+      logActivity({
+        action: 'LOGOUT',
+        module: 'Auth',
+        description: `${user.name} (${user.designation || user.role}) সিস্টেম থেকে লগআউট করেছেন`,
+        user,
+      });
+    }
     setUser(null);
     localStorage.removeItem('dentist_pro_user');
   };

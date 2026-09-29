@@ -32,6 +32,7 @@ export interface ContractInfo {
   discountPercent: number;
   payableAmount: number;
   status: 'Open' | 'Closed' | 'In-Progress';
+  rows?: any[];
 }
 
 export interface PaymentEntry {
@@ -50,6 +51,7 @@ export interface OTNotes {
   preOpDx?: string;
   postOpFinding?: string;
   anesthesiaType?: string;
+  rows?: any[];
 }
 
 export interface Prescription {
@@ -66,7 +68,7 @@ export interface Prescription {
   visitNo: number;
   // Clinical Tabs (Left)
   cc: string[]; // Chief Complaints
-  ho: Record<string, boolean>; // History checkboxes: HTN, DM, Asthma, COPD, IHD, CKD, CLD, CVD, Smoking, Tobacco Chewing, Malignancy, Allergy, Psychiatric disorder, Depression, Drug Abuse
+  ho: Record<string, boolean>; // History checkboxes
   hoCustomText: string;
   oe: string[]; // On Examination (Tooth Quadrant / Note)
   ix: string[]; // Investigation
@@ -76,6 +78,15 @@ export interface Prescription {
   treatmentDone: string[];
   specialNote: string[];
   drugHistory: string[];
+  // Quadrant data for tooth selectors
+  ccQuadrants?: any[];
+  oeQuadrants?: any[];
+  ixQuadrants?: any[];
+  ddQuadrants?: any[];
+  dxQuadrants?: any[];
+  treatmentPlanQuadrants?: any[];
+  treatmentDoneQuadrants?: any[];
+  specialNoteQuadrants?: any[];
   // Medicine & Advice (Right)
   medicines: MedicineItem[];
   advice: string[];
@@ -85,9 +96,18 @@ export interface Prescription {
   referredBy?: string;
   // Contract & Financials
   contract?: ContractInfo;
+  contractRows?: any[];
   payment?: PaymentEntry;
   // Auxiliary
   otNotes?: OTNotes;
+  otNotesRows?: any[];
+  salientText?: string;
+  historyText?: string;
+  certData?: any;
+  othersText?: string;
+  textPadNotes?: Record<string, string>;
+  textPadMode?: 'print' | 'no_print';
+  textPadTab?: 'refer' | 'drug' | 'treatment' | 'advice' | 'prescription';
   // Doctor & Cashier Workflow
   doctorName?: string;
   workflowStatus?: 'doctor_draft' | 'sent_to_cashier' | 'cashier_paid' | 'sent_to_doctor' | 'completed';
@@ -328,6 +348,10 @@ export interface MaterialUsage {
 export interface ClinicSettings {
   id: string;
   clinicName: string;
+  hotline?: string;
+  address?: string;
+  tagline?: string;
+  visitingHours?: string;
   doctor1: {
     name: string;
     degrees: string;
@@ -402,6 +426,41 @@ export interface SyncQueueItem {
   error?: string;
 }
 
+export interface ActivityLog {
+  id: string;
+  userId?: string;
+  userName: string;
+  userRole: string;
+  action: string;
+  module: 'Auth' | 'Prescription' | 'Patient' | 'Appointment' | 'Payment' | 'Material' | 'Employee' | 'Settings' | 'Template' | 'System';
+  description: string;
+  metadata?: Record<string, any>;
+  timestamp: string;
+  createdAt: string;
+}
+
+export interface CashSubmission {
+  id: string;
+  submissionNo: string;
+  cashierId?: string;
+  cashierName: string;
+  cashierMobile?: string;
+  submissionDate: string;
+  submissionTime: string;
+  cashAmount: number;
+  digitalAmount: number;
+  totalAmount: number;
+  shiftPeriod?: string;
+  notes?: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  approvedBy?: string;
+  approvedById?: string;
+  approvedAt?: string;
+  adminRemarks?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 class DentalDatabase extends Dexie {
   patients!: Table<Patient, string>;
   prescriptions!: Table<Prescription, string>;
@@ -417,6 +476,8 @@ class DentalDatabase extends Dexie {
   syncQueue!: Table<SyncQueueItem, string>;
   treatmentSessions!: Table<TreatmentSession, string>;
   employees!: Table<Employee, string>;
+  activityLogs!: Table<ActivityLog, string>;
+  cashSubmissions!: Table<CashSubmission, string>;
 
   constructor() {
     super('DentistProDB');
@@ -448,6 +509,16 @@ class DentalDatabase extends Dexie {
     });
     this.version(6).stores({
       syncQueue: 'id, collection, action, documentId, status, timestamp',
+    });
+    this.version(7).stores({
+      activityLogs: 'id, userName, userRole, action, module, timestamp, createdAt',
+    });
+    this.version(8).stores({
+      cashSubmissions: 'id, submissionNo, cashierName, submissionDate, status, createdAt',
+    });
+    this.version(9).stores({
+      prescriptions: 'id, regNo, patientId, mobile, doctorName, workflowStatus, date, createdAt',
+      appointments: 'id, regNo, mobile, doctorId, date, status, serial, createdAt',
     });
   }
 }

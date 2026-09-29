@@ -31,6 +31,7 @@ import {
 import { db, type MaterialItem, type StockEntry, type MaterialUsage } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
+import { logActivity } from '@/lib/activityLogger';
 
 export default function MaterialPage() {
   const { user } = useAuth();
@@ -172,6 +173,14 @@ export default function MaterialPage() {
     await db.materials.put(newItem);
     await syncEngine.logMutation('materials', 'INSERT', newItem.id, newItem);
 
+    logActivity({
+      action: 'CREATE_MATERIAL',
+      module: 'Material',
+      description: `নতুন ডেন্টাল ম্যাটেরিয়াল যোগ করা হয়েছে: ${newItem.name} (কোড: ${newItem.code}, ক্যাটাগরি: ${newItem.category})`,
+      metadata: { id: newItem.id, name: newItem.name, code: newItem.code, category: newItem.category },
+      user: user || undefined,
+    });
+
     setItemCode('');
     setItemName('');
     setManufacturer('');
@@ -220,6 +229,14 @@ export default function MaterialPage() {
     };
     await db.materials.put(updatedMaterial);
     await syncEngine.logMutation('materials', 'UPDATE', material.id, updatedMaterial);
+
+    logActivity({
+      action: 'STOCK_ENTRY',
+      module: 'Material',
+      description: `${material.name} - ${stockInQty} ${material.unit} স্টক ইন করা হয়েছে (মোট মূল্য: ৳${entry.totalCost.toLocaleString()})`,
+      metadata: { materialId: material.id, materialName: material.name, quantity: stockInQty, totalCost: entry.totalCost },
+      user: user || undefined,
+    });
 
     setSelectedStockInId('');
     setStockInQty(10);
@@ -283,6 +300,20 @@ export default function MaterialPage() {
     };
     await db.materials.put(updatedMaterial);
     await syncEngine.logMutation('materials', 'UPDATE', material.id, updatedMaterial);
+
+    logActivity({
+      action: 'MATERIAL_USAGE',
+      module: 'Material',
+      description: `${material.name} - ${stockOutQty} ${material.unit} ব্যবহার/খরচ করা হয়েছে (${stockOutType === 'sale' ? 'বিক্রয়' : 'ক্লিনিক্যাল ট্রিটমেন্ট'})`,
+      metadata: {
+        materialId: material.id,
+        materialName: material.name,
+        quantity: stockOutQty,
+        patientRegNo: stockOutPatientRegNo,
+        patientName: stockOutPatientName,
+      },
+      user: user || undefined,
+    });
 
     setSelectedStockOutId('');
     setStockOutQty(1);
@@ -476,6 +507,9 @@ export default function MaterialPage() {
   // Filtered Materials
   const filteredMaterials = useMemo(() => {
     return materials.filter((mat) => {
+      if (filterCategory !== 'All' && mat.category !== filterCategory) {
+        return false;
+      }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchName = mat.name.toLowerCase().includes(q);
@@ -486,7 +520,7 @@ export default function MaterialPage() {
       }
       return true;
     });
-  }, [materials, searchQuery]);
+  }, [materials, searchQuery, filterCategory]);
 
   // Filtered Usages Ledger
   const filteredUsages = useMemo(() => {
@@ -855,7 +889,23 @@ export default function MaterialPage() {
               </div>
 
               <div className="flex items-center space-x-2 text-xs">
-                <span className="text-slate-500 font-semibold">মোট আইটেম: {filteredMaterials.length} টি</span>
+                <select
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                  className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-semibold text-slate-700 focus:outline-none focus:border-blue-600 text-xs shadow-2xs"
+                >
+                  <option value="All">All Categories (সকল ক্যাটাগরি)</option>
+                  <option value="Dental Material">Dental Material</option>
+                  <option value="Oral Care Product">Oral Care</option>
+                  <option value="Medicine">Medicine / Drug</option>
+                  <option value="Disposable">Disposable</option>
+                  <option value="Orthodontic Kit">Orthodontic Kit</option>
+                  <option value="Other">Other Equipment</option>
+                </select>
+
+                <span className="text-slate-500 font-semibold bg-white border border-slate-200 px-2.5 py-1.5 rounded-lg">
+                  আইটেম: {filteredMaterials.length} টি
+                </span>
               </div>
             </div>
 

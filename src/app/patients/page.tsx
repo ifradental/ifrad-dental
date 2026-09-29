@@ -49,6 +49,7 @@ import {
 } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
+import { logActivity } from '@/lib/activityLogger';
 import { PrescriptionPrintSheet } from '@/components/prescription/PrescriptionPrintSheet';
 
 export interface PatientWithStats extends Patient {
@@ -341,6 +342,15 @@ function PatientManagementContent() {
 
         await db.patients.put(updated);
         await syncEngine.logMutation('patients', 'UPDATE', updated.id, updated);
+
+        logActivity({
+          action: 'UPDATE_PATIENT',
+          module: 'Patient',
+          description: `রোগীর তথ্য আপডেট করা হয়েছে: #${updated.regNo} (${updated.name})`,
+          metadata: { regNo: updated.regNo, name: updated.name, mobile: updated.mobile },
+          user: user || undefined,
+        });
+
         alert('রোগীর তথ্য সফলভাবে আপডেট হয়েছে!');
       } else {
         // Add new patient
@@ -361,6 +371,15 @@ function PatientManagementContent() {
 
         await db.patients.put(newPatient);
         await syncEngine.logMutation('patients', 'INSERT', newPatient.id, newPatient);
+
+        logActivity({
+          action: 'CREATE_PATIENT',
+          module: 'Patient',
+          description: `নতুন রোগী নিবন্ধন করা হয়েছে: #${newRegNo} (${newPatient.name})`,
+          metadata: { regNo: newRegNo, name: newPatient.name, mobile: newPatient.mobile },
+          user: user || undefined,
+        });
+
         alert(`নতুন রোগী সফলভাবে নিবন্ধিত হয়েছে! রেজি নং: ${newRegNo}`);
       }
 
@@ -449,6 +468,14 @@ function PatientManagementContent() {
           await syncEngine.logMutation('treatmentSessions' as any, 'DELETE', s.id, { id: s.id });
         }
       }
+
+      logActivity({
+        action: 'DELETE_PATIENT',
+        module: 'Patient',
+        description: `রোগীর ফাইল ও যাবতীয় রেকর্ড মুছে ফেলা হয়েছে: #${reg} (${patientToDelete.name})`,
+        metadata: { regNo: reg, name: patientToDelete.name, cascade: deleteCascadeHistory },
+        user: user || undefined,
+      });
 
       // Trigger sync
       syncEngine.triggerSync().catch(console.warn);

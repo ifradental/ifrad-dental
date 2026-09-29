@@ -84,6 +84,12 @@ export default function SettingsPage() {
   // 2. Clinic Settings State
   const [clinicName, setClinicName] = useState<string>('ইফরা ডেন্টাল এন্ড ফিজিওথেরাপি সেন্টার');
   const [clinicLogo, setClinicLogo] = useState<string>('');
+  const [hotline, setHotline] = useState<string>('০১৮৩৩-৩৩৭৮৮৮');
+  const [clinicAddress, setClinicAddress] = useState<string>('নন্দীপাড়া ব্রিজ সংলগ্ন (২য় তলা), খিলগাঁও, ঢাকা');
+  const [tagline, setTagline] = useState<string>('ডেন্টাল এন্ড ফিজিওথেরাপি স্পেশালিস্ট কেয়ার');
+  const [visitingHours, setVisitingHours] = useState<string>('সকাল ১০টা - দুপুর ২টা, বিকাল ৪টা - রাত ১০টা');
+  const [cloudSyncUrl, setCloudSyncUrl] = useState<string>('/api/sync');
+  const [cloudSyncApiKey, setCloudSyncApiKey] = useState<string>('');
   const [isUploadingLogo, setIsUploadingLogo] = useState<boolean>(false);
   const [footerText, setFooterText] = useState<string>('ধন্যবাদ, সুস্থ দাঁত সুন্দর হাসি। প্রয়োজনে যোগাযোগ করুন।');
   const [visitFee, setVisitFee] = useState<number>(500);
@@ -152,6 +158,10 @@ export default function SettingsPage() {
       if (settings) {
         setClinicName(settings.clinicName || 'ইফরা ডেন্টাল এন্ড ফিজিওথেরাপি সেন্টার');
         if (settings.logoUrl) setClinicLogo(settings.logoUrl);
+        setHotline(settings.hotline || settings.doctor1?.mobile || '০১৮৩৩-৩৩৭৮৮৮');
+        setClinicAddress(settings.address || 'নন্দীপাড়া ব্রিজ সংলগ্ন (২য় তলা), খিলগাঁও, ঢাকা');
+        setTagline(settings.tagline || (settings.doctor1?.designation ? `${settings.doctor1.designation} & ফিজিওথেরাপি কেয়ার` : 'ডেন্টাল এন্ড ফিজিওথেরাপি স্পেশালিস্ট কেয়ার'));
+        setVisitingHours(settings.visitingHours || 'সকাল ১০টা - দুপুর ২টা, বিকাল ৪টা - রাত ১০টা');
         setFooterText(settings.footerText || '');
         setVisitFee(settings.visitFee ?? 500);
         setRevisitFee(settings.revisitFee ?? 400);
@@ -371,6 +381,19 @@ export default function SettingsPage() {
         clinicName,
         logoUrl: clinicLogo,
         displayLogo: true,
+        hotline,
+        address: clinicAddress,
+        tagline,
+        visitingHours,
+        doctor1: {
+          ...(existing.doctor1 || ({} as any)),
+          name: existing.doctor1?.name || 'ডা. নাহিদ হাসান',
+          degrees: existing.doctor1?.degrees || 'বিডিএস, বিসিএস (স্বাস্থ্য)',
+          designation: existing.doctor1?.designation || 'ডেন্টাল সার্জন',
+          hospital: existing.doctor1?.hospital || 'ঢাকা ডেন্টাল কলেজ ও হাসপাতাল',
+          bmdcReg: existing.doctor1?.bmdcReg || '৯৩২৭',
+          mobile: hotline || existing.doctor1?.mobile || '০১৮৩৩-৩৩৭৮৮৮',
+        },
         footerText,
         visitFee: Number(visitFee),
         revisitFee: Number(revisitFee),
@@ -904,7 +927,54 @@ export default function SettingsPage() {
                 type="text"
                 value={clinicName}
                 onChange={(e) => setClinicName(e.target.value)}
+                placeholder="যেমন: ইফরা ডেন্টাল এন্ড ফিজিওথেরাপি সেন্টার"
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-bold text-slate-900"
+              />
+            </div>
+
+            <div className="col-span-12 sm:col-span-6">
+              <label className="block text-slate-700 font-semibold mb-1">ডেন্টাল কেয়ার সাব-হেডার / ট্যাগলাইন</label>
+              <input
+                type="text"
+                value={tagline}
+                onChange={(e) => setTagline(e.target.value)}
+                placeholder="যেমন: ডেন্টাল এন্ড ফিজিওথেরাপি স্পেশালিস্ট কেয়ার"
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900"
+              />
+            </div>
+
+            <div className="col-span-12 sm:col-span-6">
+              <label className="block text-slate-700 font-semibold mb-1">
+                ক্লিনিক হটলাইন / যোগাযোগ মোবাইল <span className="text-blue-600 font-bold">(টোকেন স্লিপ ও হেডারে দেখাবে)</span>
+              </label>
+              <input
+                type="text"
+                value={hotline}
+                onChange={(e) => setHotline(e.target.value)}
+                placeholder="যেমন: ০১৮৩৩-৩৩৭৮৮৮"
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-mono font-bold text-blue-900"
+              />
+            </div>
+
+            <div className="col-span-12 sm:col-span-6">
+              <label className="block text-slate-700 font-semibold mb-1">রোগী দেখার সময় (Visiting Hours)</label>
+              <input
+                type="text"
+                value={visitingHours}
+                onChange={(e) => setVisitingHours(e.target.value)}
+                placeholder="যেমন: সকাল ১০টা - দুপুর ২টা, বিকাল ৪টা - রাত ১০টা"
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900"
+              />
+            </div>
+
+            <div className="col-span-12">
+              <label className="block text-slate-700 font-semibold mb-1">ক্লিনিকের ঠিকানা (Address)</label>
+              <input
+                type="text"
+                value={clinicAddress}
+                onChange={(e) => setClinicAddress(e.target.value)}
+                placeholder="যেমন: নন্দীপাড়া ব্রিজ সংলগ্ন (২য় তলা), খিলগাঁও, ঢাকা"
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900"
               />
             </div>
 
@@ -918,7 +988,7 @@ export default function SettingsPage() {
               />
             </div>
 
-            <div className="col-span-12 sm:col-span-4">
+            <div className="col-span-12 sm:col-span-6">
               <label className="block text-slate-700 font-semibold mb-1">স্ট্যান্ডার্ড ভিজিট ফি (TK)</label>
               <input
                 type="number"
@@ -928,7 +998,7 @@ export default function SettingsPage() {
               />
             </div>
 
-            <div className="col-span-12 sm:col-span-4">
+            <div className="col-span-12 sm:col-span-6">
               <label className="block text-slate-700 font-semibold mb-1">রি-ভিজিট ফি (TK)</label>
               <input
                 type="number"
@@ -938,7 +1008,7 @@ export default function SettingsPage() {
               />
             </div>
 
-            <div className="col-span-12 sm:col-span-4">
+            <div className="col-span-12 sm:col-span-6">
               <label className="block text-slate-700 font-semibold mb-1">রি-ভিজিট মেয়াদ (দিন)</label>
               <input
                 type="number"

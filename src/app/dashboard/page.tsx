@@ -46,7 +46,9 @@ import {
   type MaterialItem, 
   type Employee 
 } from '@/lib/db';
+import { syncEngine } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
+import ThermalTokenModal from '@/components/appointments/ThermalTokenModal';
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -187,6 +189,7 @@ function DoctorDashboard({
   lowStockMaterials,
   todayStr,
 }: any) {
+  const [queueScope, setQueueScope] = useState<'my' | 'all'>('my');
   const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
   const [customStartDate, setCustomStartDate] = useState<string>(todayStr);
   const [customEndDate, setCustomEndDate] = useState<string>(todayStr);
@@ -258,11 +261,11 @@ function DoctorDashboard({
     };
   }, [dateFilter, customStartDate, customEndDate]);
 
-  // Filter appointments specifically assigned to this doctor within date range
+  // Filter appointments specifically assigned to this doctor or full clinic within date range
   const filteredDoctorAppointments = useMemo(() => {
     return allAppointments.filter((apnt) => {
-      // Doctor check
-      if (user) {
+      // Doctor check (if scope is 'my')
+      if (queueScope === 'my' && user) {
         const matchId = apnt.doctorId && (apnt.doctorId === user.employeeId || apnt.doctorId === user.id);
         const matchName = apnt.doctorName && user.name && (
           apnt.doctorName.toLowerCase().includes(user.name.toLowerCase()) ||
@@ -295,7 +298,7 @@ function DoctorDashboard({
 
       return true;
     });
-  }, [allAppointments, user, dateRange, statusFilter, searchQuery]);
+  }, [allAppointments, user, queueScope, dateRange, statusFilter, searchQuery]);
 
   // Filter prescriptions in that date range
   const filteredPrescriptions = useMemo(() => {
@@ -308,7 +311,7 @@ function DoctorDashboard({
         const q = searchQuery.toLowerCase().trim();
         const mName = rx.patientName?.toLowerCase().includes(q);
         const mReg = rx.regNo?.toString().includes(q);
-        const mDx = rx.dx?.some((diag) => diag.toLowerCase().includes(q));
+        const mDx = rx.dx?.some((diag: string) => diag.toLowerCase().includes(q));
         if (!mName && !mReg && !mDx) return false;
       }
       return true;
@@ -317,7 +320,12 @@ function DoctorDashboard({
 
   const waitingCount = filteredDoctorAppointments.filter((a) => a.status === 'Waiting').length;
   const inProgressCount = filteredDoctorAppointments.filter((a) => a.status === 'In-Progress').length;
+  const sentToCashierCount = filteredDoctorAppointments.filter((a) => a.status === 'Sent to Cashier').length;
+  const paymentDoneCount = filteredDoctorAppointments.filter((a) => a.status === 'Payment Done').length;
   const completedCount = filteredDoctorAppointments.filter((a) => a.status === 'Completed').length;
+
+  // Find next waiting patient for quick call
+  const nextWaitingPatient = filteredDoctorAppointments.find((a) => a.status === 'Waiting');
 
   return (
     <div className="p-3.5 max-w-[1550px] mx-auto text-slate-800 space-y-4">
@@ -441,7 +449,7 @@ function DoctorDashboard({
 
         {/* Search & Status Filter Row */}
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 pt-2 border-t border-slate-100">
-          <div className="sm:col-span-8 relative">
+          <div className="sm:col-span-5 relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
             <input
               type="text"
@@ -452,7 +460,32 @@ function DoctorDashboard({
             />
           </div>
 
-          <div className="sm:col-span-4">
+          <div className="sm:col-span-4 flex items-center space-x-1 bg-slate-100 p-1 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setQueueScope('my')}
+              className={`flex-1 py-1 px-2 rounded-md text-[11px] font-bold transition ${
+                queueScope === 'my'
+                  ? 'bg-blue-700 text-white shadow-xs'
+                  : 'text-slate-700 hover:text-slate-900'
+              }`}
+            >
+              আমার চেম্বার কিউ ({user?.name || 'My Queue'})
+            </button>
+            <button
+              type="button"
+              onClick={() => setQueueScope('all')}
+              className={`flex-1 py-1 px-2 rounded-md text-[11px] font-bold transition ${
+                queueScope === 'all'
+                  ? 'bg-blue-700 text-white shadow-xs'
+                  : 'text-slate-700 hover:text-slate-900'
+              }`}
+            >
+              ক্লিনিকের সকল রোগী
+            </button>
+          </div>
+
+          <div className="sm:col-span-3">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
@@ -461,6 +494,8 @@ function DoctorDashboard({
               <option value="ALL">সকল অবস্থা (All Status)</option>
               <option value="Waiting">Waiting (অপেক্ষমান)</option>
               <option value="In-Progress">In-Progress (চিকিৎসাধীন)</option>
+              <option value="Sent to Cashier">Sent to Cashier (ক্যাশিয়ারে)</option>
+              <option value="Payment Done">Payment Done (বিল পরিশোধিত)</option>
               <option value="Completed">Completed (সম্পন্ন)</option>
               <option value="Absent">Absent (অনুপস্থিত)</option>
               <option value="Scheduled">Scheduled (শিডিউল)</option>
@@ -575,22 +610,40 @@ function DoctorDashboard({
         {/* Left Column: Doctor's Queue Matching Filter (5 cols) */}
         <div className="col-span-12 lg:col-span-5 bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-200">
+            <div className="flex flex-wrap items-center justify-between pb-3 mb-3 border-b border-slate-200 gap-2">
               <div className="flex items-center space-x-2">
                 <Calendar className="w-4 h-4 text-blue-600" />
                 <h2 className="font-bold text-sm text-slate-900">
                   রোগী সিরিয়াল ও চেম্বার কিউ ({filteredDoctorAppointments.length} জন)
                 </h2>
               </div>
-              <Link href="/appointments" className="text-xs text-blue-600 hover:underline font-semibold">
-                সব দেখুন →
-              </Link>
+              <div className="flex items-center space-x-2">
+                {nextWaitingPatient && (
+                  <Link
+                    href={`/prescription?regNo=${nextWaitingPatient.regNo || ''}&apntId=${nextWaitingPatient.id}&name=${encodeURIComponent(
+                      nextWaitingPatient.name
+                    )}&age=${encodeURIComponent(nextWaitingPatient.age || '')}&sex=${nextWaitingPatient.sex || 'M'}&mobile=${encodeURIComponent(
+                      nextWaitingPatient.mobile || ''
+                    )}&problem=${encodeURIComponent(nextWaitingPatient.problem || '')}&doctor=${encodeURIComponent(
+                      nextWaitingPatient.doctorName || user?.name || ''
+                    )}`}
+                    className="px-2.5 py-1 bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold text-[11px] rounded-lg shadow-xs transition flex items-center space-x-1"
+                    title={`পরবর্তী অপেক্ষমাণ রোগী ডাকুন (#${nextWaitingPatient.serial} - ${nextWaitingPatient.name})`}
+                  >
+                    <Stethoscope className="w-3 h-3 text-slate-950" />
+                    <span>রোগী ডাকুন (#{nextWaitingPatient.serial})</span>
+                  </Link>
+                )}
+                <Link href="/appointments" className="text-xs text-blue-600 hover:underline font-semibold">
+                  সব দেখুন →
+                </Link>
+              </div>
             </div>
 
             {filteredDoctorAppointments.length === 0 ? (
               <div className="py-10 text-center text-slate-400 text-xs">
                 <Clock className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                নির্বাচিত সময়কালের মধ্যে আপনার কোনো অ্যাপয়েন্টমেন্ট শিডিউল নেই।
+                নির্বাচিত সময়কালের মধ্যে কোনো অ্যাপয়েন্টমেন্ট শিডিউল নেই।
               </div>
             ) : (
               <div className="space-y-2.5 text-xs max-h-[550px] overflow-y-auto pr-1">
@@ -600,6 +653,12 @@ function DoctorDashboard({
                     className={`p-3 rounded-xl border transition ${
                       apnt.status === 'Completed'
                         ? 'bg-emerald-50/50 border-emerald-200'
+                        : apnt.status === 'Sent to Cashier'
+                        ? 'bg-purple-50/50 border-purple-200'
+                        : apnt.status === 'Payment Done'
+                        ? 'bg-teal-50/50 border-teal-200'
+                        : apnt.status === 'In-Progress'
+                        ? 'bg-blue-50/50 border-blue-200'
                         : 'bg-slate-50 hover:bg-white border-slate-200 hover:border-blue-300 hover:shadow-xs'
                     }`}
                   >
@@ -636,6 +695,12 @@ function DoctorDashboard({
                               <span className="truncate">{apnt.problem}</span>
                             </div>
                           )}
+                          {apnt.doctorName && (
+                            <div className="text-[10px] text-indigo-700 mt-1 font-semibold flex items-center gap-1">
+                              <Stethoscope className="w-3 h-3" />
+                              <span>{apnt.doctorName}</span>
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -644,17 +709,35 @@ function DoctorDashboard({
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                             apnt.status === 'Completed'
                               ? 'bg-emerald-100 text-emerald-800'
+                              : apnt.status === 'Payment Done'
+                              ? 'bg-teal-100 text-teal-800'
+                              : apnt.status === 'Sent to Cashier'
+                              ? 'bg-purple-100 text-purple-800'
                               : apnt.status === 'Waiting'
                               ? 'bg-amber-100 text-amber-800'
+                              : apnt.status === 'In-Progress'
+                              ? 'bg-blue-100 text-blue-800'
                               : apnt.status === 'Absent'
                               ? 'bg-rose-100 text-rose-800'
-                              : 'bg-blue-100 text-blue-800'
+                              : 'bg-slate-100 text-slate-800'
                           }`}
                         >
-                          {apnt.status === 'Completed' ? '✓ সম্পন্ন' : apnt.status === 'Waiting' ? 'অপেক্ষমাণ' : apnt.status === 'Absent' ? 'অনুপস্থিত' : apnt.status}
+                          {apnt.status === 'Completed'
+                            ? '✓ সম্পন্ন'
+                            : apnt.status === 'Payment Done'
+                            ? 'বিল পরিশোধিত'
+                            : apnt.status === 'Sent to Cashier'
+                            ? 'ক্যাশিয়ারে'
+                            : apnt.status === 'Waiting'
+                            ? 'অপেক্ষমাণ'
+                            : apnt.status === 'In-Progress'
+                            ? 'চিকিৎসাধীন'
+                            : apnt.status === 'Absent'
+                            ? 'অনুপস্থিত'
+                            : apnt.status}
                         </span>
 
-                        {apnt.status === 'Completed' ? (
+                        {apnt.status === 'Completed' || apnt.status === 'Payment Done' || apnt.status === 'Sent to Cashier' ? (
                           <div className="flex items-center space-x-1">
                             <Link
                               href={`/patients?regNo=${apnt.regNo || ''}`}
@@ -1060,6 +1143,10 @@ function ReceptionistDashboard({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
+  // Thermal Token Modal State
+  const [selectedTokenApnt, setSelectedTokenApnt] = useState<Appointment | null>(null);
+  const [isTokenModalOpen, setIsTokenModalOpen] = useState<boolean>(false);
+
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -1078,6 +1165,18 @@ function ReceptionistDashboard({
 
   useEffect(() => {
     loadData();
+
+    const handleRefresh = () => {
+      loadData();
+    };
+
+    window.addEventListener('storage', handleRefresh);
+    window.addEventListener('focus', handleRefresh);
+
+    return () => {
+      window.removeEventListener('storage', handleRefresh);
+      window.removeEventListener('focus', handleRefresh);
+    };
   }, []);
 
   // Compute active date boundaries
@@ -1171,6 +1270,17 @@ function ReceptionistDashboard({
       setAllAppointments((prev) =>
         prev.map((a) => (a.id === id ? { ...a, status: newStatus } : a))
       );
+      await syncEngine.logMutation('appointments', 'UPDATE', id, { status: newStatus });
+
+      // Direct MongoDB patch
+      fetch('/api/appointments', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status: newStatus }),
+      }).catch((err) => console.warn('Direct MongoDB patch notice:', err));
+
+      // Broadcast storage event
+      window.dispatchEvent(new Event('storage'));
     } catch (e) {
       console.error('Failed to change appointment status:', e);
     }
@@ -1340,6 +1450,8 @@ function ReceptionistDashboard({
               <option value="ALL">সকল অবস্থা (All Status)</option>
               <option value="Waiting">Waiting (অপেক্ষমান)</option>
               <option value="In-Progress">In-Progress (চিকিৎসাধীন)</option>
+              <option value="Sent to Cashier">Sent to Cashier (ক্যাশ কাউন্টারে)</option>
+              <option value="Payment Done">Payment Done (বিল পরিশোধিত)</option>
               <option value="Completed">Completed (সম্পন্ন)</option>
               <option value="Absent">Absent (অনুপস্থিত)</option>
               <option value="Scheduled">Scheduled (শিডিউল)</option>
@@ -1520,46 +1632,53 @@ function ReceptionistDashboard({
                       <select
                         value={apnt.status}
                         onChange={(e) => handleQuickStatusChange(apnt.id, e.target.value as any)}
-                        className={`px-2 py-0.5 rounded font-bold text-[10px] border cursor-pointer ${
+                        className={`px-2 py-0.5 rounded font-bold text-[10px] border cursor-pointer transition ${
                           apnt.status === 'Completed'
                             ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                             : apnt.status === 'Waiting'
                             ? 'bg-amber-100 text-amber-800 border-amber-300'
                             : apnt.status === 'In-Progress'
                             ? 'bg-blue-100 text-blue-800 border-blue-300'
+                            : apnt.status === 'Sent to Cashier'
+                            ? 'bg-purple-100 text-purple-900 border-purple-400 font-black ring-1 ring-purple-400'
+                            : apnt.status === 'Payment Done'
+                            ? 'bg-teal-100 text-teal-850 border-teal-300 font-bold'
                             : apnt.status === 'Absent'
                             ? 'bg-rose-100 text-rose-800 border-rose-300'
-                            : 'bg-slate-100 text-slate-700 border-slate-300'
+                            : apnt.status === 'Cancelled'
+                            ? 'bg-slate-200 text-slate-700 border-slate-400'
+                            : 'bg-slate-100 text-slate-750 border-slate-300'
                         }`}
                       >
-                        <option value="Waiting">Waiting</option>
-                        <option value="In-Progress">In-Progress</option>
-                        <option value="Completed">Completed</option>
-                        <option value="Absent">Absent</option>
-                        <option value="Scheduled">Scheduled</option>
-                        <option value="Cancelled">Cancelled</option>
+                        <option value="Waiting">Waiting (অপেক্ষমান)</option>
+                        <option value="In-Progress">In-Progress (চিকিৎসাধীন)</option>
+                        <option value="Sent to Cashier">Sent to Cashier (ক্যাশে প্রেরিত)</option>
+                        <option value="Payment Done">Payment Done (বিল পরিশোধিত)</option>
+                        <option value="Completed">Completed (সম্পন্ন)</option>
+                        <option value="Absent">Absent (অনুপস্থিত)</option>
+                        <option value="Scheduled">Scheduled (শিডিউল)</option>
+                        <option value="Cancelled">Cancelled (বাতিল)</option>
                       </select>
                     </td>
 
                     {/* Action */}
                     <td className="p-2.5 text-center">
-                      <div className="flex items-center justify-center space-x-1">
-                        <Link
-                          href={`/prescription?regNo=${apnt.regNo || ''}&apntId=${apnt.id}&name=${encodeURIComponent(
-                            apnt.name
-                          )}&age=${encodeURIComponent(apnt.age || '')}&sex=${apnt.sex || 'M'}&mobile=${encodeURIComponent(
-                            apnt.mobile || ''
-                          )}&problem=${encodeURIComponent(apnt.problem || '')}&doctor=${encodeURIComponent(
-                            apnt.doctorName || ''
-                          )}`}
-                          title="প্রেসক্রিপশন পেজে যান"
-                          className="px-2 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded text-[11px] font-semibold transition"
+                      <div className="flex items-center justify-center space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedTokenApnt(apnt);
+                            setIsTokenModalOpen(true);
+                          }}
+                          title="থার্মাল টোকেন রিসিট প্রিন্ট করুন"
+                          className="px-2 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded text-[11px] font-bold transition flex items-center gap-1 shadow-xs cursor-pointer"
                         >
-                          Rx
-                        </Link>
+                          <Printer className="w-3 h-3" />
+                          <span>টোকেন</span>
+                        </button>
                         <Link
                           href="/appointments"
-                          title="অ্যাপয়েন্টমেন্ট ম্যানেজারে দেখুন"
+                          title="অ্যাপয়েন্টমেন্ট ম্যানেজারে বিস্তারিত দেখুন"
                           className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[11px] font-semibold border border-slate-200 transition"
                         >
                           ডিটেইলস
@@ -1573,6 +1692,19 @@ function ReceptionistDashboard({
           </div>
         )}
       </div>
+
+      {/* Thermal Token Print Modal for Patient Serial Slip */}
+      {selectedTokenApnt && (
+        <ThermalTokenModal
+          isOpen={isTokenModalOpen}
+          onClose={() => {
+            setIsTokenModalOpen(false);
+            setSelectedTokenApnt(null);
+          }}
+          appointment={selectedTokenApnt}
+          clinicSettings={clinicSettings}
+        />
+      )}
     </div>
   );
 }

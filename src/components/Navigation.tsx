@@ -21,7 +21,9 @@ import {
   WifiOff,
   LogOut,
   UserCheck,
-  Stethoscope
+  Stethoscope,
+  Users,
+  Activity
 } from 'lucide-react';
 import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
@@ -35,13 +37,15 @@ interface NavItem {
 const navItems: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { name: 'Patient Management', href: '/patients', icon: <UserCheck className="w-4 h-4" /> },
-  { name: 'Prescription', href: '/', icon: <FileText className="w-4 h-4" /> },
+  { name: 'Prescription', href: '/prescription', icon: <FileText className="w-4 h-4" /> },
   { name: 'Drug DB', href: '/drugs', icon: <Pill className="w-4 h-4" /> },
   { name: 'Template', href: '/templates', icon: <LayoutTemplate className="w-4 h-4" /> },
   { name: 'Appointment', href: '/appointments', icon: <Calendar className="w-4 h-4" /> },
   { name: 'Payment', href: '/payments', icon: <CreditCard className="w-4 h-4" /> },
   { name: 'Header Edit', href: '/header-edit', icon: <Heading1 className="w-4 h-4" /> },
   { name: 'Material', href: '/materials', icon: <Package className="w-4 h-4" /> },
+  { name: 'Employees', href: '/employees', icon: <Users className="w-4 h-4" /> },
+  { name: 'Activities', href: '/activities', icon: <Activity className="w-4 h-4" /> },
   { name: 'Setup', href: '/setup', icon: <Settings className="w-4 h-4" /> },
   { name: 'Database', href: '/database', icon: <Database className="w-4 h-4" /> },
   { name: 'SMS', href: '/sms', icon: <MessageSquare className="w-4 h-4" /> },
@@ -162,9 +166,7 @@ export function Navigation() {
         {navItems.map((item) => {
           const isActive = 
             item.href === '/dashboard' 
-              ? pathname === '/dashboard' 
-              : item.href === '/' 
-              ? pathname === '/' 
+              ? pathname === '/dashboard' || pathname === '/'
               : pathname.startsWith(item.href);
 
           return (

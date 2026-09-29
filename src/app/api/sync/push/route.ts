@@ -13,9 +13,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          message: 'MongoDB connection not configured (MONGODB_URI missing). Data preserved in local DB.',
+          error: 'MongoDB connection not configured (MONGODB_URI missing). Data preserved in local DB.',
+          processed: 0,
+          results: [],
         },
-        { status: 200 }
+        { status: 503 }
       );
     }
 
@@ -23,51 +25,72 @@ export async function POST(req: NextRequest) {
     const { clientId, mutations } = body;
 
     if (!mutations || !Array.isArray(mutations)) {
-      return NextResponse.json({ error: 'Invalid mutations payload' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'Invalid mutations payload' }, { status: 400 });
     }
 
-    const results: { id: string; collection: string; status: string }[] = [];
+    const results: { id: string; documentId: string; collection: string; status: 'UPSERTED' | 'DELETED' | 'FAILED'; error?: string }[] = [];
 
     for (const mutation of mutations) {
-      const { collection, action, documentId, payload } = mutation;
+      const { id: queueId, collection, action, documentId, payload } = mutation;
       const Model = modelMap[collection];
 
       if (!Model) {
         console.warn(`Collection ${collection} not mapped in Mongoose models.`);
+        results.push({
+          id: queueId || documentId,
+          documentId,
+          collection,
+          status: 'FAILED',
+          error: `Collection "${collection}" is not supported in MongoDB schema`,
+        });
         continue;
       }
 
-      if (action === 'DELETE') {
-        await Model.deleteOne({ id: documentId });
-        results.push({ id: documentId, collection, status: 'DELETED' });
-      } else {
-        // UPSERT (INSERT or UPDATE)
-        const dataToSave = {
-          ...payload,
-          id: documentId,
-          updatedAt: new Date(),
-        };
+      try {
+        if (action === 'DELETE') {
+          await Model.deleteOne({ id: documentId });
+          results.push({ id: queueId || documentId, documentId, collection, status: 'DELETED' });
+        } else {
+          // UPSERT (INSERT or UPDATE)
+          const dataToSave = {
+            ...payload,
+            id: documentId,
+            updatedAt: new Date(),
+          };
 
-        await Model.findOneAndUpdate(
-          { id: documentId },
-          { $set: dataToSave },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
+          await Model.findOneAndUpdate(
+            { id: documentId },
+            { $set: dataToSave },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          );
 
-        results.push({ id: documentId, collection, status: 'UPSERTED' });
+          results.push({ id: queueId || documentId, documentId, collection, status: 'UPSERTED' });
+        }
+      } catch (mutationErr: any) {
+        console.error(`Failed to sync mutation for ${collection}/${documentId}:`, mutationErr);
+        results.push({
+          id: queueId || documentId,
+          documentId,
+          collection,
+          status: 'FAILED',
+          error: mutationErr.message || 'Database write error',
+        });
       }
     }
 
+    const successCount = results.filter((r) => r.status === 'UPSERTED' || r.status === 'DELETED').length;
+
     return NextResponse.json({
-      success: true,
-      processed: results.length,
+      success: successCount > 0,
+      processed: successCount,
+      total: mutations.length,
       syncedAt: new Date().toISOString(),
       results,
     });
   } catch (error: any) {
     console.error('Error in /api/sync/push:', error);
     return NextResponse.json(
-      { error: error.message || 'Internal server error during sync' },
+      { success: false, error: error.message || 'Internal server error during sync' },
       { status: 500 }
     );
   }

@@ -39,14 +39,17 @@ import {
   Send,
   Lock,
   Download,
-  Loader2
+  Loader2,
+  Receipt
 } from 'lucide-react';
 import { db, type Patient, type Prescription, type Drug, type TemplateItem, type PaymentRecord, type TreatmentSession } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { convertEnglishToBanglaDigits, convertPhoneticToBangla } from '@/lib/banglaPhonetic';
 import { checkMedXDrugInteractions } from '@/lib/medxDrugs';
 import { useAuth } from '@/context/AuthContext';
+import { logActivity } from '@/lib/activityLogger';
 import { PrescriptionPrintSheet } from './PrescriptionPrintSheet';
+import PaymentReceiptModal from '@/components/payments/PaymentReceiptModal';
 
 interface PrescriptionEditorProps {
   initialRegNo?: number;
@@ -58,6 +61,7 @@ interface PrescriptionEditorProps {
   initialProblem?: string;
   initialDoctorName?: string;
   initialAppointmentId?: string;
+  initialFocus?: string;
   onSaved?: (prescriptionId: string) => void;
 }
 
@@ -95,6 +99,7 @@ export function PrescriptionEditor({
   initialProblem,
   initialDoctorName,
   initialAppointmentId,
+  initialFocus,
   onSaved,
 }: PrescriptionEditorProps) {
   // User & Role Context
@@ -109,6 +114,10 @@ export function PrescriptionEditor({
   const [workflowStatus, setWorkflowStatus] = useState<'doctor_draft' | 'sent_to_cashier' | 'cashier_paid' | 'sent_to_doctor' | 'completed'>('doctor_draft');
   const [workflowNotice, setWorkflowNotice] = useState<string>('');
 
+  // Payment Receipt Modal State
+  const [activeReceiptPayment, setActiveReceiptPayment] = useState<PaymentRecord | null>(null);
+  const [showReceiptModal, setShowReceiptModal] = useState<boolean>(false);
+
   // Patient Details
   const [regNo, setRegNo] = useState<number>(4201);
   const [patientName, setPatientName] = useState<string>('');
@@ -121,6 +130,7 @@ export function PrescriptionEditor({
   const [visitNo, setVisitNo] = useState<number>(1);
   const [referredBy, setReferredBy] = useState<string>('');
   const [birthYear, setBirthYear] = useState<string>('');
+  const [doctorName, setDoctorName] = useState<string>(initialDoctorName || '');
 
   // Patient Info Modal
   const [showPatientInfoModal, setShowPatientInfoModal] = useState<boolean>(false);
@@ -593,19 +603,98 @@ export function PrescriptionEditor({
       const templates = await db.templates.toArray();
       setAllTemplates(templates);
 
-      let loadedRx: Prescription | undefined = undefined;
+      let loadedRx: Prescription | any = undefined;
+
+      // 1. Try finding by prescriptionId (local or cloud)
       if (initialPrescriptionId) {
         loadedRx = await db.prescriptions.get(initialPrescriptionId);
-      } else if (initialRegNo) {
-        const existingRx = await db.prescriptions.where('regNo').equals(initialRegNo).last();
-        if (existingRx && initialAppointmentId) {
-          const ap = await db.appointments.get(initialAppointmentId);
-          if (ap?.prescriptionId || ap?.status === 'Completed') {
-            loadedRx = existingRx;
+        if (!loadedRx) {
+          try {
+            const res = await fetch(`/api/prescriptions?id=${encodeURIComponent(initialPrescriptionId)}`);
+            const data = await res.json();
+            if (data.success && data.prescription) {
+              loadedRx = data.prescription;
+              await db.prescriptions.put(loadedRx);
+            }
+          } catch (e) {
+            console.warn('Could not fetch prescription from MongoDB by ID:', e);
           }
         }
       }
 
+      // 2. Try finding by appointment's prescriptionId or linked appointment
+      if (!loadedRx && initialAppointmentId) {
+        try {
+          const ap = await db.appointments.get(initialAppointmentId);
+          if (ap?.prescriptionId) {
+            loadedRx = await db.prescriptions.get(ap.prescriptionId);
+            if (!loadedRx) {
+              const res = await fetch(`/api/prescriptions?id=${encodeURIComponent(ap.prescriptionId)}`);
+              const data = await res.json();
+              if (data.success && data.prescription) {
+                loadedRx = data.prescription;
+                await db.prescriptions.put(loadedRx);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Could not lookup appointment prescriptionId:', e);
+        }
+      }
+
+      // 3. Try finding by Registration Number (local or cloud)
+      if (!loadedRx && initialRegNo) {
+        loadedRx = await db.prescriptions.where('regNo').equals(initialRegNo).last();
+        if (!loadedRx) {
+          try {
+            const res = await fetch(`/api/prescriptions?regNo=${initialRegNo}`);
+            const data = await res.json();
+            if (data.success && data.prescriptions && data.prescriptions.length > 0) {
+              loadedRx = data.prescriptions[0];
+              await db.prescriptions.put(loadedRx);
+            }
+          } catch (e) {
+            console.warn('Could not fetch prescription from MongoDB by RegNo:', e);
+          }
+        }
+      }
+
+      // 4. Try finding by Mobile
+      if (!loadedRx && initialMobile?.trim()) {
+        try {
+          const matchedPatient = await db.patients.where('mobile').equals(initialMobile.trim()).first();
+          if (matchedPatient?.regNo) {
+            loadedRx = await db.prescriptions.where('regNo').equals(matchedPatient.regNo).last();
+          }
+        } catch (e) {
+          console.warn('Patient lookup by mobile notice:', e);
+        }
+
+        if (!loadedRx) {
+          try {
+            loadedRx = await db.prescriptions.where('mobile').equals(initialMobile.trim()).last().catch(() => null);
+          } catch (e) {
+            // Fallback to array find if index migration is mid-flight
+            const allRx = await db.prescriptions.toArray();
+            loadedRx = allRx.reverse().find((r) => r.mobile === initialMobile.trim());
+          }
+        }
+
+        if (!loadedRx) {
+          try {
+            const res = await fetch(`/api/prescriptions?mobile=${encodeURIComponent(initialMobile.trim())}`);
+            const data = await res.json();
+            if (data.success && data.prescriptions && data.prescriptions.length > 0) {
+              loadedRx = data.prescriptions[0];
+              await db.prescriptions.put(loadedRx);
+            }
+          } catch (e) {
+            console.warn('Could not fetch prescription from MongoDB by mobile:', e);
+          }
+        }
+      }
+
+      // Restore complete state if loadedRx exists
       if (loadedRx) {
         if (loadedRx.regNo) setRegNo(loadedRx.regNo);
         if (loadedRx.patientName) setPatientName(loadedRx.patientName);
@@ -617,23 +706,151 @@ export function PrescriptionEditor({
         if (loadedRx.date) setDate(loadedRx.date);
         if (loadedRx.visitNo) setVisitNo(loadedRx.visitNo);
         if (loadedRx.referredBy) setReferredBy(loadedRx.referredBy);
-        if (loadedRx.cc && loadedRx.cc.length > 0) setCcList(loadedRx.cc);
+        if (loadedRx.doctorName) setDoctorName(loadedRx.doctorName);
+        if (loadedRx.workflowStatus) setWorkflowStatus(loadedRx.workflowStatus);
+
+        // Clinical Lists & Tooth Selectors
+        if (loadedRx.cc && loadedRx.cc.length > 0) {
+          setCcList(loadedRx.cc);
+          if (loadedRx.ccQuadrants && Array.isArray(loadedRx.ccQuadrants)) {
+            setCcQuadrants(loadedRx.ccQuadrants);
+          } else {
+            setCcQuadrants(loadedRx.cc.map(() => defaultQuadrant()));
+          }
+        }
         if (loadedRx.ho) setHo(loadedRx.ho);
         if (loadedRx.hoCustomText) setHoCustomText(loadedRx.hoCustomText);
-        if (loadedRx.oe && loadedRx.oe.length > 0) setOeList(loadedRx.oe);
-        if (loadedRx.ix && loadedRx.ix.length > 0) setIxList(loadedRx.ix);
-        if (loadedRx.dd && loadedRx.dd.length > 0) setDdList(loadedRx.dd);
-        if (loadedRx.dx && loadedRx.dx.length > 0) setDxList(loadedRx.dx);
-        if (loadedRx.treatmentPlan && loadedRx.treatmentPlan.length > 0) setTreatmentPlanList(loadedRx.treatmentPlan);
-        if (loadedRx.treatmentDone && loadedRx.treatmentDone.length > 0) setTreatmentDoneList(loadedRx.treatmentDone);
-        if (loadedRx.specialNote && loadedRx.specialNote.length > 0) setSpecialNoteList(loadedRx.specialNote);
-        if (loadedRx.drugHistory && loadedRx.drugHistory.length > 0) setDrugHistoryList(loadedRx.drugHistory);
-        if (loadedRx.medicines && loadedRx.medicines.length > 0) setMedicines(loadedRx.medicines);
-        if (loadedRx.advice && loadedRx.advice.length > 0) setAdviceList(loadedRx.advice);
+
+        if (loadedRx.oe && loadedRx.oe.length > 0) {
+          setOeList(loadedRx.oe);
+          if (loadedRx.oeQuadrants && Array.isArray(loadedRx.oeQuadrants)) {
+            setOeQuadrants(loadedRx.oeQuadrants);
+          } else {
+            setOeQuadrants(loadedRx.oe.map(() => defaultQuadrant()));
+          }
+        }
+        if (loadedRx.ix && loadedRx.ix.length > 0) {
+          setIxList(loadedRx.ix);
+          if (loadedRx.ixQuadrants && Array.isArray(loadedRx.ixQuadrants)) {
+            setIxQuadrants(loadedRx.ixQuadrants);
+          } else {
+            setIxQuadrants(loadedRx.ix.map(() => defaultQuadrant()));
+          }
+        }
+        if (loadedRx.dd && loadedRx.dd.length > 0) {
+          setDdList(loadedRx.dd);
+          if (loadedRx.ddQuadrants && Array.isArray(loadedRx.ddQuadrants)) {
+            setDdQuadrants(loadedRx.ddQuadrants);
+          } else {
+            setDdQuadrants(loadedRx.dd.map(() => defaultQuadrant()));
+          }
+        }
+        if (loadedRx.dx && loadedRx.dx.length > 0) {
+          setDxList(loadedRx.dx);
+          if (loadedRx.dxQuadrants && Array.isArray(loadedRx.dxQuadrants)) {
+            setDxQuadrants(loadedRx.dxQuadrants);
+          } else {
+            setDxQuadrants(loadedRx.dx.map(() => defaultQuadrant()));
+          }
+        }
+        if (loadedRx.treatmentPlan && loadedRx.treatmentPlan.length > 0) {
+          setTreatmentPlanList(loadedRx.treatmentPlan);
+          if (loadedRx.treatmentPlanQuadrants && Array.isArray(loadedRx.treatmentPlanQuadrants)) {
+            setTreatmentPlanQuadrants(loadedRx.treatmentPlanQuadrants);
+          } else {
+            setTreatmentPlanQuadrants(loadedRx.treatmentPlan.map(() => defaultQuadrant()));
+          }
+        }
+        if (loadedRx.treatmentDone && loadedRx.treatmentDone.length > 0) {
+          setTreatmentDoneList(loadedRx.treatmentDone);
+          if (loadedRx.treatmentDoneQuadrants && Array.isArray(loadedRx.treatmentDoneQuadrants)) {
+            setTreatmentDoneQuadrants(loadedRx.treatmentDoneQuadrants);
+          } else {
+            setTreatmentDoneQuadrants(loadedRx.treatmentDone.map(() => defaultQuadrant()));
+          }
+        }
+        if (loadedRx.specialNote && loadedRx.specialNote.length > 0) {
+          setSpecialNoteList(loadedRx.specialNote);
+          if (loadedRx.specialNoteQuadrants && Array.isArray(loadedRx.specialNoteQuadrants)) {
+            setSpecialNoteQuadrants(loadedRx.specialNoteQuadrants);
+          } else {
+            setSpecialNoteQuadrants(loadedRx.specialNote.map(() => defaultQuadrant()));
+          }
+        }
+        if (loadedRx.drugHistory && loadedRx.drugHistory.length > 0) {
+          setDrugHistoryList(loadedRx.drugHistory);
+        }
+
+        // Medicines & Advice
+        if (loadedRx.medicines && loadedRx.medicines.length > 0) {
+          setMedicines(loadedRx.medicines);
+        }
+        if (loadedRx.advice && loadedRx.advice.length > 0) {
+          setAdviceList(loadedRx.advice);
+        }
         if (loadedRx.nextVisitDate) setNextVisitDate(loadedRx.nextVisitDate);
         if (loadedRx.revisitText) setRevisitOption(loadedRx.revisitText);
         if (loadedRx.timeSlot) setNextVisitTime(loadedRx.timeSlot);
-        if (loadedRx.workflowStatus) setWorkflowStatus(loadedRx.workflowStatus);
+
+        // Contract & Tooth Quadrant Restoration
+        const savedContractRows = loadedRx.contract?.rows || loadedRx.contractRows;
+        if (savedContractRows && Array.isArray(savedContractRows) && savedContractRows.length > 0) {
+          setContractRows(savedContractRows);
+        } else if (loadedRx.contract?.particulars) {
+          const parts = loadedRx.contract.particulars.split(',').map((s: string) => s.trim()).filter(Boolean);
+          if (parts.length > 0) {
+            const rows = parts.map((p: string) => ({
+              particulars: p,
+              quadrant: defaultQuadrant(),
+              price: Math.round((loadedRx.contract?.price || 0) / parts.length),
+              unitPrice: Math.round((loadedRx.contract?.price || 0) / parts.length),
+            }));
+            while (rows.length < 3) {
+              rows.push({ particulars: '', quadrant: defaultQuadrant(), price: 0, unitPrice: 0 });
+            }
+            setContractRows(rows);
+          }
+        }
+
+        if (loadedRx.contract?.contractNo) setContractNo(loadedRx.contract.contractNo);
+        if (loadedRx.contract?.discountTk !== undefined) setDiscountTk(loadedRx.contract.discountTk);
+        if (loadedRx.contract?.discountPercent !== undefined) setDiscountPercent(loadedRx.contract.discountPercent);
+        if (loadedRx.contract?.status) setContractStatus(loadedRx.contract.status);
+
+        // OT Notes Restoration
+        const savedOtRows = loadedRx.otNotes?.rows || loadedRx.otNotesRows;
+        if (savedOtRows && Array.isArray(savedOtRows) && savedOtRows.length > 0) {
+          setOtNotesRows(savedOtRows);
+        } else if (loadedRx.otNotes) {
+          setOtNotesRows([
+            { particularis: 'Date', value: loadedRx.otNotes.date || '' },
+            { particularis: 'Time', value: loadedRx.otNotes.time || '' },
+            { particularis: 'Indication', value: loadedRx.otNotes.indication || '' },
+            { particularis: 'Name of the operation', value: loadedRx.otNotes.operationName || '' },
+            { particularis: 'Procedure', value: loadedRx.otNotes.procedure || '' },
+            { particularis: 'Pre Operative Dx', value: loadedRx.otNotes.preOpDx || '' },
+            { particularis: 'Post Operative Finding', value: loadedRx.otNotes.postOpFinding || '' },
+            { particularis: 'Type of Anesthesia', value: loadedRx.otNotes.anesthesiaType || '' },
+            { particularis: 'Name of the Surgeon', value: '' },
+            { particularis: 'Name of the Anesthesiol', value: '' },
+            { particularis: 'Name of the assistant', value: '' },
+            { particularis: 'Hospital Stay Time', value: '' },
+            { particularis: 'Special Note', value: '' },
+            { particularis: '', value: '' },
+            { particularis: '', value: '' },
+            { particularis: '', value: '' },
+          ]);
+        }
+
+        // Additional EMR fields
+        if (loadedRx.salientText) setSalientText(loadedRx.salientText);
+        if (loadedRx.historyText) setHistoryText(loadedRx.historyText);
+        if (loadedRx.certData) setCertData(loadedRx.certData);
+        if (loadedRx.othersText) setOthersText(loadedRx.othersText);
+        if (loadedRx.textPadNotes) setTextPadNotes(loadedRx.textPadNotes);
+        if (loadedRx.textPadMode) setTextPadMode(loadedRx.textPadMode);
+        if (loadedRx.textPadTab) setTextPadTab(loadedRx.textPadTab);
+
         await loadPatientFinancialsAndJourney(loadedRx.regNo);
       } else {
         if (initialRegNo) {
@@ -657,10 +874,29 @@ export function PrescriptionEditor({
         if (initialProblem && initialProblem.trim()) {
           setCcList([initialProblem.trim()]);
         }
+        if (initialDoctorName) {
+          setDoctorName(initialDoctorName);
+        } else if (isDoctor && user?.name) {
+          setDoctorName(user.name);
+        } else if (settings?.doctor1?.name) {
+          setDoctorName(settings.doctor1.name);
+        }
       }
     }
     loadData();
-  }, [initialRegNo, initialPrescriptionId, initialAppointmentId, initialName, initialAge, initialSex, initialMobile, initialProblem]);
+  }, [initialRegNo, initialPrescriptionId, initialAppointmentId, initialName, initialAge, initialSex, initialMobile, initialProblem, initialDoctorName, isDoctor, user]);
+
+  // Smooth scroll to payment entry section when focus=payment is passed in URL
+  useEffect(() => {
+    if (initialFocus === 'payment') {
+      setTimeout(() => {
+        const el = document.getElementById('payment-entry-section');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 400);
+    }
+  }, [initialFocus]);
 
   // Load Payments and Treatment Sessions for active RegNo
   const loadPatientFinancialsAndJourney = async (searchReg: number) => {
@@ -681,6 +917,7 @@ export function PrescriptionEditor({
         }));
         while (rows.length < 3) {
           rows.push({
+            id: `tr_${Date.now()}_${rows.length + 1}`,
             sl: rows.length + 1,
             date: '',
             treatmentName: '',
@@ -692,9 +929,9 @@ export function PrescriptionEditor({
         setTreatmentJourneyRows(rows);
       } else {
         setTreatmentJourneyRows([
-          { sl: 1, date: new Date().toISOString().split('T')[0], treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
-          { sl: 2, date: '', treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
-          { sl: 3, date: '', treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
+          { id: `tr_1`, sl: 1, date: new Date().toISOString().split('T')[0], treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
+          { id: `tr_2`, sl: 2, date: '', treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
+          { id: `tr_3`, sl: 3, date: '', treatmentName: '', beforeTreatment: '', afterTreatment: '', nextDate: '' },
         ]);
       }
     } catch (e) {
@@ -788,6 +1025,10 @@ export function PrescriptionEditor({
     setPatientPayments(updatedPmts);
     setPaidToday(0);
     setPaymentNote('');
+
+    // Automatically open Payment Money Receipt modal for viewing & printing
+    setActiveReceiptPayment(paymentRecord);
+    setShowReceiptModal(true);
   };
 
   // Delete Payment Transaction
@@ -1386,7 +1627,7 @@ export function PrescriptionEditor({
       occupation,
       date,
       visitNo,
-      doctorName: initialDoctorName || (isDoctor ? user?.name : clinicSettings?.doctor1?.name || 'ডা. নাহিদ হাসান'),
+      doctorName: doctorName || initialDoctorName || (isDoctor ? user?.name : clinicSettings?.doctor1?.name || 'ডা. নাহিদ হাসান'),
       workflowStatus: effectiveStatus,
       sentToCashierAt: effectiveStatus === 'sent_to_cashier' ? new Date().toISOString() : undefined,
       sentToDoctorAt: (effectiveStatus === 'sent_to_doctor' || effectiveStatus === 'cashier_paid') ? new Date().toISOString() : undefined,
@@ -1418,7 +1659,9 @@ export function PrescriptionEditor({
         discountPercent,
         payableAmount,
         status: contractStatus,
+        rows: contractRows,
       },
+      contractRows,
       payment: {
         paidToday,
         totalBill: payableAmount,
@@ -1434,7 +1677,24 @@ export function PrescriptionEditor({
         preOpDx: otNotesRows.find((r) => r.particularis === 'Pre Operative Dx')?.value || '',
         postOpFinding: otNotesRows.find((r) => r.particularis === 'Post Operative Finding')?.value || '',
         anesthesiaType: otNotesRows.find((r) => r.particularis === 'Type of Anesthesia')?.value || '',
+        rows: otNotesRows,
       },
+      otNotesRows,
+      ccQuadrants,
+      oeQuadrants,
+      ixQuadrants,
+      ddQuadrants,
+      dxQuadrants,
+      treatmentPlanQuadrants,
+      treatmentDoneQuadrants,
+      specialNoteQuadrants,
+      salientText,
+      historyText,
+      certData,
+      othersText,
+      textPadNotes,
+      textPadMode,
+      textPadTab,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       synced: false,
@@ -1448,6 +1708,60 @@ export function PrescriptionEditor({
     if (Number(regNo) >= (clinicSettings?.lastRegNo || 0)) {
       await db.settings.update('default_settings', { lastRegNo: Number(regNo) });
       setClinicSettings((prev) => prev ? { ...prev, lastRegNo: Number(regNo) } : prev);
+    }
+
+    // Determine target appointment for status update and link
+    let targetApntId = initialAppointmentId;
+    const effectiveDate = date || new Date().toISOString().split('T')[0];
+    
+    try {
+      if (!targetApntId && regNo) {
+        const matching = await db.appointments
+          .where('regNo')
+          .equals(Number(regNo))
+          .and((a) => a.date === effectiveDate && (a.status === 'Waiting' || a.status === 'In-Progress' || a.status === 'Scheduled' || a.status === 'Sent to Cashier'))
+          .last();
+        if (matching) {
+          targetApntId = matching.id;
+        }
+      }
+      if (!targetApntId && mobile?.trim()) {
+        const matching = await db.appointments
+          .where('mobile')
+          .equals(mobile.trim())
+          .and((a) => a.date === effectiveDate && (a.status === 'Waiting' || a.status === 'In-Progress' || a.status === 'Scheduled' || a.status === 'Sent to Cashier'))
+          .last();
+        if (matching) {
+          targetApntId = matching.id;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not lookup matching appointment:', e);
+    }
+
+    let appointmentStatus: any = 'Completed';
+    if (effectiveStatus === 'sent_to_cashier') {
+      appointmentStatus = 'Sent to Cashier';
+    } else if (effectiveStatus === 'sent_to_doctor' || effectiveStatus === 'cashier_paid') {
+      appointmentStatus = 'Payment Done';
+    } else if (effectiveStatus === 'doctor_draft') {
+      appointmentStatus = 'In-Progress';
+    }
+
+    // Direct POST to MongoDB /api/prescriptions for instantaneous cloud saving
+    try {
+      fetch('/api/prescriptions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prescription: prescriptionData,
+          patient: patientData,
+          appointmentId: targetApntId,
+          appointmentStatus,
+        }),
+      }).catch((err) => console.warn('Direct MongoDB prescription save notice:', err));
+    } catch (err) {
+      console.warn('MongoDB direct prescription save call failed:', err);
     }
 
     // If payment made, record in Payments table
@@ -1594,20 +1908,65 @@ export function PrescriptionEditor({
     const refreshedTemplates = await db.templates.toArray();
     setAllTemplates(refreshedTemplates);
 
-    // If initiated from an appointment, update appointment status and link prescriptionId
-    if (initialAppointmentId) {
-      try {
-        let appointmentStatus: any = 'Completed';
-        if (effectiveStatus === 'sent_to_cashier') {
-          appointmentStatus = 'Sent to Cashier';
-        } else if (effectiveStatus === 'sent_to_doctor' || effectiveStatus === 'cashier_paid') {
-          appointmentStatus = 'Payment Done';
-        }
-        await db.appointments.update(initialAppointmentId, { status: appointmentStatus, prescriptionId });
-        await syncEngine.logMutation('appointments', 'UPDATE', initialAppointmentId, { status: appointmentStatus, prescriptionId });
-      } catch (err) {
-        console.warn('Could not update appointment status:', err);
+    // Update appointment queue locally & in MongoDB
+    try {
+      if (targetApntId) {
+        await db.appointments.update(targetApntId, { status: appointmentStatus, prescriptionId });
+        await syncEngine.logMutation('appointments', 'UPDATE', targetApntId, { status: appointmentStatus, prescriptionId });
+
+        // Direct PATCH to MongoDB cloud database
+        fetch('/api/appointments', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: targetApntId, status: appointmentStatus, prescriptionId }),
+        }).catch((err) => console.warn('Direct MongoDB apnt patch notice:', err));
       }
+
+      // Trigger sync engine to push all pending mutations
+      syncEngine.triggerSync().catch(() => {});
+
+      // Notify all open pages/tabs that appointment queue data changed
+      window.dispatchEvent(new Event('storage'));
+    } catch (err) {
+      console.warn('Could not update appointment queue status:', err);
+    }
+
+    // Record Employee Activity Log
+    try {
+      let actionType = initialPrescriptionId ? 'UPDATE_PRESCRIPTION' : 'CREATE_PRESCRIPTION';
+      let actionDesc = `পেশেন্ট #${regNo} (${patientName}) এর প্রেসক্রিপশন ${initialPrescriptionId ? 'আপডেট' : 'সংরক্ষণ'} করা হয়েছে`;
+      let moduleType: 'Prescription' | 'Payment' = 'Prescription';
+
+      if (effectiveStatus === 'completed') {
+        actionType = 'COMPLETE_TREATMENT';
+        actionDesc = `পেশেন্ট #${regNo} (${patientName}) এর ডেন্টাল চিকিৎসা সম্পন্ন (Completed) করা হয়েছে`;
+      } else if (effectiveStatus === 'sent_to_cashier') {
+        actionType = 'SEND_TO_CASHIER';
+        actionDesc = `পেশেন্ট #${regNo} (${patientName}) এর প্রেসক্রিপশন ক্যাশিয়ারের নিকট পাঠানো হয়েছে (মোট বিল: ৳${payableAmount.toLocaleString()})`;
+      } else if (effectiveStatus === 'sent_to_doctor' || effectiveStatus === 'cashier_paid') {
+        actionType = 'COLLECT_PAYMENT';
+        moduleType = 'Payment';
+        actionDesc = `পেশেন্ট #${regNo} (${patientName}) এর জন্য ৳${paidToday.toLocaleString()} পেমেন্ট সংগ্রহ করে ডাক্তারের কাছে ফেরত পাঠানো হয়েছে`;
+      }
+
+      logActivity({
+        action: actionType,
+        module: moduleType,
+        description: actionDesc,
+        metadata: {
+          prescriptionId,
+          regNo: Number(regNo),
+          patientName,
+          workflowStatus: effectiveStatus,
+          totalBill: payableAmount,
+          paidToday,
+          totalDue,
+          doctorName: isDoctor ? user?.name : doctorName,
+        },
+        user: user || undefined,
+      });
+    } catch (actErr) {
+      console.warn('Activity log error:', actErr);
     }
 
     if (onSaved) {
@@ -1655,6 +2014,18 @@ export function PrescriptionEditor({
     setWorkflowStatus('sent_to_doctor');
     await handleSave(false, false, 'sent_to_doctor', true);
     setWorkflowNotice('✅ পেমেন্ট সংগ্রহ করা হয়েছে এবং প্রেসক্রিপশনটি ডাক্তারের কাছে ফেরত পাঠানো হয়েছে!');
+    setTimeout(() => setWorkflowNotice(''), 6000);
+  };
+
+  // Doctor or Admin marks treatment completely done
+  const handleCompleteTreatment = async (andPrint: boolean = false) => {
+    if (!patientName.trim()) {
+      alert('অনুগ্রহ করে রোগীর নাম লিখুন!');
+      return;
+    }
+    setWorkflowStatus('completed');
+    await handleSave(andPrint, false, 'completed', true);
+    setWorkflowNotice('🎉 চিকিৎসা ও প্রেসক্রিপশন সফলভাবে সম্পন্ন (Completed) হয়েছে!');
     setTimeout(() => setWorkflowNotice(''), 6000);
   };
 
@@ -2005,6 +2376,22 @@ export function PrescriptionEditor({
   return (
     <>
       <div className={`p-2 max-w-[1550px] mx-auto text-slate-800 ${previewModalOpen ? 'no-print' : ''}`}>
+      {/* Receptionist / Cashier Protected Mode Notification Banner */}
+      {isCashier && !isAdmin && (
+        <div className="mb-2 p-2.5 bg-blue-50 border border-blue-300 rounded-lg text-blue-950 text-xs flex flex-wrap items-center justify-between gap-2 shadow-xs no-print">
+          <div className="flex items-center space-x-2">
+            <Lock className="w-4 h-4 text-blue-700 shrink-0" />
+            <div>
+              <span className="font-bold text-blue-900">রিসেপশনিস্ট / ক্যাশিয়ার মোড:</span>
+              <span className="ml-1 text-slate-700">ক্লিনিক্যাল অংশগুলো সুরক্ষিত রাখা হয়েছে। নিচে <strong>Payment Entry</strong> তে রোগীর পেমেন্ট যোগ করুন এবং <strong>Send to Doctor</strong> বাটনে ক্লিক করে রোগীকে ডাক্তারের চেম্বারে পাঠান।</span>
+            </div>
+          </div>
+          <span className="text-[10px] bg-blue-200 text-blue-900 px-2.5 py-0.5 rounded-full font-bold">
+            Payment &amp; Cashier Access Only
+          </span>
+        </div>
+      )}
+
       {/* TOP PATIENT BAR & ACTION BUTTONS */}
       <div className="bg-sky-50 border border-sky-200 rounded-lg p-2.5 mb-2 shadow-sm no-print">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2014,10 +2401,14 @@ export function PrescriptionEditor({
               <span className="text-slate-700">Name :</span>
               <input
                 type="text"
+                disabled={isCashier && !isAdmin}
+                readOnly={isCashier && !isAdmin}
                 value={patientName}
                 onChange={(e) => setPatientName(e.target.value)}
                 placeholder="Patient Full Name"
-                className="px-2 py-1 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 w-44 bg-white font-normal"
+                className={`px-2 py-1 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 w-44 font-normal ${
+                  isCashier && !isAdmin ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white'
+                }`}
               />
             </div>
 
@@ -2025,19 +2416,26 @@ export function PrescriptionEditor({
               <span className="text-slate-700">Age :</span>
               <input
                 type="text"
+                disabled={isCashier && !isAdmin}
+                readOnly={isCashier && !isAdmin}
                 value={age}
                 onChange={(e) => setAge(e.target.value)}
                 placeholder="Age"
-                className="px-2 py-1 border border-slate-300 rounded w-14 bg-white font-normal text-center"
+                className={`px-2 py-1 border border-slate-300 rounded w-14 font-normal text-center ${
+                  isCashier && !isAdmin ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white'
+                }`}
               />
             </div>
 
             <div className="flex items-center space-x-1">
               <span className="text-slate-700">Sex :</span>
               <select
+                disabled={isCashier && !isAdmin}
                 value={sex}
                 onChange={(e) => setSex(e.target.value)}
-                className="px-1.5 py-1 border border-slate-300 rounded bg-white font-normal"
+                className={`px-1.5 py-1 border border-slate-300 rounded font-normal ${
+                  isCashier && !isAdmin ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white'
+                }`}
               >
                 <option value="M">M</option>
                 <option value="F">F</option>
@@ -2049,10 +2447,14 @@ export function PrescriptionEditor({
               <span className="text-slate-700">Address :</span>
               <input
                 type="text"
+                disabled={isCashier && !isAdmin}
+                readOnly={isCashier && !isAdmin}
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="Address"
-                className="px-2 py-1 border border-slate-300 rounded w-36 bg-white font-normal"
+                className={`px-2 py-1 border border-slate-300 rounded w-36 font-normal ${
+                  isCashier && !isAdmin ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white'
+                }`}
               />
             </div>
 
@@ -2060,10 +2462,14 @@ export function PrescriptionEditor({
               <span className="text-slate-700">Mobile :</span>
               <input
                 type="text"
+                disabled={isCashier && !isAdmin}
+                readOnly={isCashier && !isAdmin}
                 value={mobile}
                 onChange={(e) => setMobile(e.target.value)}
                 placeholder="01XXXXXXXXX"
-                className="px-2 py-1 border border-slate-300 rounded w-28 bg-white font-normal"
+                className={`px-2 py-1 border border-slate-300 rounded w-28 font-normal ${
+                  isCashier && !isAdmin ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white'
+                }`}
               />
             </div>
 
@@ -2071,12 +2477,16 @@ export function PrescriptionEditor({
               <span className="text-slate-700 font-bold text-blue-900">Reg No. :</span>
               <input
                 type="number"
+                disabled={isCashier && !isAdmin}
+                readOnly={isCashier && !isAdmin}
                 value={regNo}
                 onChange={(e) => setRegNo(Number(e.target.value))}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') loadPatientByRegNo(regNo);
                 }}
-                className="px-2 py-1 border border-emerald-500 bg-[#c8e6c9] text-emerald-950 font-bold rounded w-20 text-center"
+                className={`px-2 py-1 border border-emerald-500 bg-[#c8e6c9] text-emerald-950 font-bold rounded w-20 text-center ${
+                  isCashier && !isAdmin ? 'cursor-not-allowed' : ''
+                }`}
               />
             </div>
 
@@ -2084,10 +2494,14 @@ export function PrescriptionEditor({
               <span className="text-slate-700">Occ. :</span>
               <input
                 type="text"
+                disabled={isCashier && !isAdmin}
+                readOnly={isCashier && !isAdmin}
                 value={occupation}
                 onChange={(e) => setOccupation(e.target.value)}
                 placeholder="Occ"
-                className="px-2 py-1 border border-slate-300 rounded w-20 bg-white font-normal"
+                className={`px-2 py-1 border border-slate-300 rounded w-20 font-normal ${
+                  isCashier && !isAdmin ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white'
+                }`}
               />
             </div>
 
@@ -2095,11 +2509,22 @@ export function PrescriptionEditor({
               <span className="text-slate-700">Date :</span>
               <input
                 type="date"
+                disabled={isCashier && !isAdmin}
+                readOnly={isCashier && !isAdmin}
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                className="px-2 py-1 border border-slate-300 rounded bg-white font-normal text-xs"
+                className={`px-2 py-1 border border-slate-300 rounded font-normal text-xs ${
+                  isCashier && !isAdmin ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white'
+                }`}
               />
             </div>
+
+            {doctorName && (
+              <div className="flex items-center space-x-1 bg-indigo-50 border border-indigo-200 px-2 py-1 rounded text-indigo-950 font-bold text-xs" title={`প্রেসক্রাইবার ডাক্তার: ${doctorName}`}>
+                <Stethoscope className="w-3.5 h-3.5 text-indigo-700" />
+                <span className="truncate max-w-[150px]">{doctorName}</span>
+              </div>
+            )}
 
             <button
               type="button"
@@ -2120,8 +2545,10 @@ export function PrescriptionEditor({
               className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
                 workflowStatus === 'sent_to_cashier'
                   ? 'bg-amber-100 text-amber-800 border-amber-300'
+                  : workflowStatus === 'completed'
+                  ? 'bg-emerald-100 text-emerald-900 border-emerald-400 font-bold'
                   : workflowStatus === 'sent_to_doctor' || workflowStatus === 'cashier_paid'
-                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                  ? 'bg-teal-100 text-teal-800 border-teal-300'
                   : 'bg-slate-100 text-slate-700 border-slate-300'
               }`}
             >
@@ -2130,9 +2557,14 @@ export function PrescriptionEditor({
                   <Clock className="w-3.5 h-3.5 text-amber-600" />
                   <span>Sent to Cashier (বিল সংগ্রহের অপেক্ষায়)</span>
                 </>
-              ) : workflowStatus === 'sent_to_doctor' || workflowStatus === 'cashier_paid' ? (
+              ) : workflowStatus === 'completed' ? (
                 <>
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Treatment Completed (চিকিৎসা সম্পন্ন)</span>
+                </>
+              ) : workflowStatus === 'sent_to_doctor' || workflowStatus === 'cashier_paid' ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
                   <span>Returned from Cashier (পরিশোধিত)</span>
                 </>
               ) : (
@@ -2143,25 +2575,39 @@ export function PrescriptionEditor({
               )}
             </div>
 
-            {/* Doctor sends to Cashier */}
-            <button
-              onClick={handleSendToCashier}
-              className="flex items-center space-x-1 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded font-bold shadow transition"
-              title="প্রেসক্রিপশনটি সেভ করে ক্যাশিয়ারের কাছে পেমেন্ট সংগ্রহের জন্য পাঠান"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Send to Cashier</span>
-            </button>
+            {/* Doctor / Admin sends to Cashier */}
+            {(isDoctor || isAdmin || !isCashier) && (
+              <button
+                onClick={handleSendToCashier}
+                className="flex items-center space-x-1 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded font-bold shadow transition"
+                title="প্রেসক্রিপশনটি সেভ করে ক্যাশিয়ারের কাছে পেমেন্ট সংগ্রহের জন্য পাঠান"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Send to Cashier</span>
+              </button>
+            )}
 
-            {/* Cashier/Admin sends back to Doctor */}
-            {canManagePayment && (
+            {/* Cashier / Admin sends back to Doctor */}
+            {(canManagePayment || isAdmin) && (
               <button
                 onClick={handleSendBackToDoctor}
                 className="flex items-center space-x-1 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded font-bold shadow transition"
-                title="পেমেন্ট সংগ্রহ শেষে প্রেসক্রিপশনটি ডাক্তারের কাছে পাঠান"
+                title="পেমেন্ট সংগ্রহ শেষে প্রেসক্রিপশনটি ডাক্তারের কাছে ফেরত পাঠান"
               >
                 <ArrowRight className="w-3.5 h-3.5" />
                 <span>Send to Doctor</span>
+              </button>
+            )}
+
+            {/* Doctor / Admin marks Treatment as Completed */}
+            {(isDoctor || isAdmin || !isCashier) && (
+              <button
+                onClick={() => handleCompleteTreatment(false)}
+                className="flex items-center space-x-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold shadow transition"
+                title="চিকিৎসা সমাপ্ত করুন এবং অ্যাপয়েন্টমেন্ট স্ট্যাটাস Completed হিসেবে আপডেট করুন"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>চিকিৎসা সম্পন্ন</span>
               </button>
             )}
 
@@ -2226,7 +2672,7 @@ export function PrescriptionEditor({
       {/* MAIN TWO COLUMN LAYOUT */}
       <div className="grid grid-cols-12 gap-2">
         {/* LEFT COLUMN: CLINICAL FINDINGS (4 Columns) */}
-        <div className="col-span-12 lg:col-span-4 space-y-1 text-xs">
+        <div className={`col-span-12 lg:col-span-4 space-y-1 text-xs ${isCashier && !isAdmin ? 'pointer-events-none opacity-80 select-none' : ''}`}>
           {/* 1. C/C */}
           {renderClinicalSection('C/C', ccList, setCcList, ccQuadrants, setCcQuadrants, 'cc', 'cc', 'Chief complaint details...')}
 
@@ -2616,7 +3062,7 @@ export function PrescriptionEditor({
         {/* RIGHT COLUMN: RX MEDICATIONS, ADVICE, CONTRACT, PAYMENT & CLINICAL EXTRAS (8 Columns) */}
         <div className="col-span-12 lg:col-span-8 space-y-2">
           {/* Rx TABLE & TEMPLATES BAR */}
-          <div className="bg-white rounded border border-blue-300 overflow-hidden shadow-sm">
+          <div className={`bg-white rounded border border-blue-300 overflow-hidden shadow-sm ${isCashier && !isAdmin ? 'pointer-events-none opacity-80 select-none' : ''}`}>
             <div className="bg-gradient-to-r from-slate-700 to-slate-800 text-white px-3 py-1.5 flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <span className="font-serif italic font-bold text-lg text-yellow-300">Rx</span>
@@ -2968,7 +3414,7 @@ export function PrescriptionEditor({
           </div>
 
           {/* ADVICE & NEXT VISIT (Side by Side Matching Screenshot) */}
-          <div className="grid grid-cols-12 gap-2 text-xs">
+          <div className={`grid grid-cols-12 gap-2 text-xs ${isCashier && !isAdmin ? 'pointer-events-none opacity-80 select-none' : ''}`}>
             {/* Advice Section */}
             <div className="col-span-12 md:col-span-7 relative">
               <div className="bg-white rounded border border-blue-300 p-2 shadow-sm">
@@ -3278,7 +3724,7 @@ export function PrescriptionEditor({
           </div>
 
           {/* CONTRACT ENTRY SECTION (Matching Screenshot 2 & 3) */}
-          <div className="bg-[#d5e4f2] border border-[#a2c2e2] rounded p-2 shadow-sm text-xs mb-2">
+          <div className={`bg-[#d5e4f2] border border-[#a2c2e2] rounded p-2 shadow-sm text-xs mb-2 ${isCashier && !isAdmin ? 'pointer-events-none opacity-80 select-none' : ''}`}>
             <div className="font-bold text-slate-900 text-sm mb-1.5 text-center">Contract Entry</div>
             <div className="grid grid-cols-12 gap-3">
               {/* Left Contract Table */}
@@ -3902,7 +4348,7 @@ export function PrescriptionEditor({
           </div>
 
           {/* SECTION 1 — PAYMENT ENTRY (পেমেন্ট ও লেজার) */}
-          <div className="bg-gradient-to-b from-[#f0f6fc] to-[#e4eff9] border border-[#b2d2ec] rounded-lg p-3 shadow-sm text-xs mb-3">
+          <div id="payment-entry-section" className="bg-gradient-to-b from-[#f0f6fc] to-[#e4eff9] border border-[#b2d2ec] rounded-lg p-3 shadow-sm text-xs mb-3 scroll-mt-6">
             <div className="flex flex-wrap justify-between items-center pb-2 mb-2.5 border-b border-[#c8ddf0]">
               <div className="flex items-center space-x-2">
                 <div className="w-7 h-7 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold shadow-sm">
@@ -4142,18 +4588,29 @@ export function PrescriptionEditor({
                             </span>
                           </td>
                           <td className="py-1 px-2 text-center whitespace-nowrap">
-                            {canManagePayment ? (
+                            <div className="flex items-center justify-center space-x-1.5">
                               <button
                                 type="button"
-                                onClick={() => handleDeletePayment(p.id)}
-                                className="text-slate-400 hover:text-red-600 p-0.5 rounded transition-colors"
-                                title="Delete Payment"
+                                onClick={() => {
+                                  setActiveReceiptPayment(p);
+                                  setShowReceiptModal(true);
+                                }}
+                                className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-100/70 rounded transition-colors"
+                                title="রসিদ দেখুন ও প্রিন্ট করুন (View & Print Receipt)"
                               >
-                                <Trash2 className="w-3 h-3" />
+                                <Receipt className="w-3.5 h-3.5" />
                               </button>
-                            ) : (
-                              <span className="text-slate-300 text-[10px]">-</span>
-                            )}
+                              {canManagePayment && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeletePayment(p.id)}
+                                  className="text-slate-400 hover:text-red-600 p-1 rounded transition-colors"
+                                  title="Delete Payment"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -6291,6 +6748,23 @@ export function PrescriptionEditor({
             </div>
           </div>
         </div>
+      )}
+
+      {/* PAYMENT MONEY RECEIPT MODAL */}
+      {showReceiptModal && activeReceiptPayment && (
+        <PaymentReceiptModal
+          isOpen={showReceiptModal}
+          onClose={() => setShowReceiptModal(false)}
+          payment={activeReceiptPayment}
+          prescription={{
+            id: initialPrescriptionId || '',
+            regNo: Number(regNo),
+            patientName,
+            doctorName: doctorName || initialDoctorName || 'ডা. নাহিদ হাসান',
+            treatmentPlan: treatmentPlanList.filter(Boolean),
+          } as any}
+          clinicSettings={clinicSettings}
+        />
       )}
     </>
   );

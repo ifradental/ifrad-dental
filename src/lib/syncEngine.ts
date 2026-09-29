@@ -149,14 +149,37 @@ class SyncEngine {
 
       const result = await response.json();
 
-      // Mark synchronized items as completed by deleting from queue
-      const syncedIds = pendingItems.map((item) => item.id);
-      await db.syncQueue.bulkDelete(syncedIds);
+      if (!result.success && (!result.results || result.results.length === 0)) {
+        throw new Error(result.error || result.message || 'Server rejected synchronization payload');
+      }
+
+      // Mark ONLY verified synchronized items as completed by deleting from queue
+      const confirmedResults = (result.results || []).filter(
+        (r: any) => r.status === 'UPSERTED' || r.status === 'DELETED'
+      );
+
+      const confirmedQueueIds = new Set(
+        confirmedResults.map((r: any) => r.id)
+      );
+
+      const confirmedDocumentIds = new Set(
+        confirmedResults.map((r: any) => r.documentId)
+      );
+
+      const queueIdsToDelete = pendingItems
+        .filter((item) => confirmedQueueIds.has(item.id) || confirmedDocumentIds.has(item.documentId))
+        .map((item) => item.id);
+
+      if (queueIdsToDelete.length > 0) {
+        await db.syncQueue.bulkDelete(queueIdsToDelete);
+      }
 
       // Update settings lastSyncedAt
-      await db.settings.update('default_settings', {
-        lastSyncedAt: new Date().toISOString(),
-      });
+      if (result.syncedAt || queueIdsToDelete.length > 0) {
+        await db.settings.update('default_settings', {
+          lastSyncedAt: result.syncedAt || new Date().toISOString(),
+        });
+      }
 
       this.status = 'online';
       this.isSyncing = false;
@@ -164,8 +187,8 @@ class SyncEngine {
 
       return {
         success: true,
-        syncedCount: pendingItems.length,
-        message: `Successfully synced ${pendingItems.length} records to MongoDB Atlas!`,
+        syncedCount: queueIdsToDelete.length,
+        message: `Successfully synced ${queueIdsToDelete.length} of ${pendingItems.length} records to MongoDB Atlas!`,
       };
     } catch (error: any) {
       console.warn('Sync failed (offline or server unreachable):', error.message);
@@ -176,7 +199,7 @@ class SyncEngine {
       return {
         success: false,
         syncedCount: 0,
-        message: `Saved locally. Will sync when server is reachable: ${error.message}`,
+        message: `Saved locally in IndexedDB. Will sync when MongoDB is reachable: ${error.message}`,
       };
     }
   }

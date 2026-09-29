@@ -1,6 +1,7 @@
 'use client';
-
+ 
 import React, { useState, useEffect, useMemo } from 'react';
+import Link from 'next/link';
 import {
   Users,
   UserPlus,
@@ -29,12 +30,17 @@ import {
   Briefcase,
   Layers,
   Sparkles,
-  Award
+  Award,
+  Activity,
+  History
 } from 'lucide-react';
 import { db, type Employee, type EmployeeRole } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
+import { useAuth } from '@/context/AuthContext';
+import { logActivity } from '@/lib/activityLogger';
 
 export default function EmployeesPage() {
+  const { user } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -189,6 +195,19 @@ export default function EmployeesPage() {
         employeeRecord
       );
 
+      logActivity({
+        action: editingEmployeeId ? 'UPDATE_EMPLOYEE' : 'CREATE_EMPLOYEE',
+        module: 'Employee',
+        description: `কর্মচারী ${editingEmployeeId ? 'তথ্য আপডেট' : 'যোগ করা'} হয়েছে: ${employeeRecord.name} (${employeeRecord.designation}, রোল: ${employeeRecord.role})`,
+        metadata: {
+          employeeId: employeeRecord.id,
+          name: employeeRecord.name,
+          role: employeeRecord.role,
+          username: employeeRecord.username,
+        },
+        user: user || undefined,
+      });
+
       setShowAddModal(false);
       setEditingEmployeeId(null);
       await loadEmployees();
@@ -209,6 +228,15 @@ export default function EmployeesPage() {
     const updated = { ...emp, status: nextStatus, updatedAt: new Date().toISOString() };
     await db.employees.update(emp.id, { status: nextStatus, updatedAt: updated.updatedAt });
     await syncEngine.logMutation('employees', 'UPDATE', emp.id, updated);
+
+    logActivity({
+      action: 'STATUS_CHANGE',
+      module: 'Employee',
+      description: `কর্মচারী "${emp.name}" এর স্ট্যাটাস '${nextStatus}' করা হয়েছে`,
+      metadata: { employeeId: emp.id, name: emp.name, status: nextStatus },
+      user: user || undefined,
+    });
+
     await loadEmployees();
   };
 
@@ -217,6 +245,15 @@ export default function EmployeesPage() {
     if (confirm(`আপনি কি নিশ্চিত "${name}"-কে তালিকা থেকে মুছে ফেলতে চান?`)) {
       await db.employees.delete(id);
       await syncEngine.logMutation('employees', 'DELETE', id, { id });
+
+      logActivity({
+        action: 'DELETE_EMPLOYEE',
+        module: 'Employee',
+        description: `কর্মচারী মুছে ফেলা হয়েছে: "${name}"`,
+        metadata: { employeeId: id, name },
+        user: user || undefined,
+      });
+
       if (viewingEmployee?.id === id) setViewingEmployee(null);
       await loadEmployees();
     }
@@ -357,6 +394,13 @@ export default function EmployeesPage() {
         </div>
 
         <div className="flex items-center space-x-2">
+          <Link
+            href="/activities"
+            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 flex items-center space-x-1.5 transition-all shadow-xs"
+          >
+            <Activity className="w-4 h-4 text-blue-600" />
+            <span>Activity Log (কাজের ইতিহাস)</span>
+          </Link>
           <button
             type="button"
             onClick={handleOpenAddModal}
