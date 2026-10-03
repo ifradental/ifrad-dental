@@ -19,24 +19,46 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const sinceParam = searchParams.get('since');
-    const sinceDate = sinceParam ? new Date(Number(sinceParam)) : new Date(0);
+    const sinceNum = Number(sinceParam || 0);
+    const isFullSync = !sinceParam || isNaN(sinceNum) || sinceNum === 0;
+    const sinceDate = !isFullSync ? new Date(sinceNum) : new Date(0);
 
     const updates: Record<string, any[]> = {};
+    const allIds: Record<string, string[]> = {};
 
-    for (const [key, Model] of Object.entries(modelMap)) {
-      const records = await Model.find({
-        updatedAt: { $gte: sinceDate },
+    await Promise.all(
+      Object.entries(modelMap).map(async ([key, Model]) => {
+        try {
+          const filter = isFullSync
+            ? {}
+            : {
+                $or: [
+                  { updatedAt: { $gte: sinceDate } },
+                  { createdAt: { $gte: sinceDate } },
+                ],
+              };
+
+          const [records, idDocs] = await Promise.all([
+            Model.find(filter).limit(5000).lean(),
+            Model.find({}, { id: 1 }).lean(),
+          ]);
+
+          updates[key] = records;
+          allIds[key] = idDocs.map((d: any) => d.id).filter(Boolean);
+        } catch (err: any) {
+          console.warn(`Failed pulling collection ${key}:`, err.message);
+          updates[key] = [];
+          allIds[key] = [];
+        }
       })
-        .limit(1000)
-        .lean();
-
-      updates[key] = records;
-    }
+    );
 
     return NextResponse.json({
       success: true,
       pulledAt: new Date().toISOString(),
+      isFullSync,
       updates,
+      allIds,
     });
   } catch (error: any) {
     console.error('Error in /api/sync/pull:', error);

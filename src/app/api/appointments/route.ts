@@ -131,15 +131,13 @@ export async function PATCH(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { id, status, prescriptionId } = body;
+    const { id, ...otherFields } = body;
 
     if (!id) {
       return NextResponse.json({ error: 'Missing appointment "id"' }, { status: 400 });
     }
 
-    const updateFields: any = { updatedAt: new Date() };
-    if (status) updateFields.status = status;
-    if (prescriptionId) updateFields.prescriptionId = prescriptionId;
+    const updateFields: any = { ...otherFields, updatedAt: new Date() };
 
     const updated = await AppointmentModel.findOneAndUpdate(
       { id },
@@ -149,7 +147,7 @@ export async function PATCH(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Appointment ${id} status updated to ${status} in MongoDB.`,
+      message: `Appointment ${id} updated in MongoDB.`,
       appointment: updated,
     });
   } catch (error: any) {

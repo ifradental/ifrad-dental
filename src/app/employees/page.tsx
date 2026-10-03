@@ -78,6 +78,23 @@ export default function EmployeesPage() {
 
   useEffect(() => {
     loadEmployees();
+    syncEngine.pullUpdates().then(() => loadEmployees()).catch(() => {});
+
+    const unsub = syncEngine.onDataChange((cols) => {
+      if (!cols || cols.includes('employees')) {
+        loadEmployees();
+      }
+    });
+
+    const handleFocus = () => {
+      loadEmployees();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      unsub();
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
   const loadEmployees = async () => {

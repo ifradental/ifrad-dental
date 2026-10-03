@@ -54,6 +54,23 @@ export default function ActivitiesPage() {
 
   useEffect(() => {
     loadData();
+    syncEngine.pullUpdates().then(() => loadData()).catch(() => {});
+
+    const unsub = syncEngine.onDataChange((cols) => {
+      if (!cols || cols.includes('employees')) {
+        loadData();
+      }
+    });
+
+    const handleFocus = () => {
+      loadData();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      unsub();
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
   const loadData = async () => {

@@ -55,6 +55,8 @@ import { PrescriptionPrintSheet } from '@/components/prescription/PrescriptionPr
 export interface PatientWithStats extends Patient {
   totalVisits: number;
   lastVisitDate: string;
+  nextFollowUpDate?: string;
+  isFollowUp?: boolean;
   totalBilled: number;
   totalPaid: number;
   totalDue: number;
@@ -79,6 +81,7 @@ function PatientManagementContent() {
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [genderFilter, setGenderFilter] = useState<'ALL' | 'M' | 'F'>('ALL');
+  const [scheduleFilter, setScheduleFilter] = useState<'ALL' | 'NEW' | 'OLD' | 'FOLLOW_UP'>('ALL');
   const [sortBy, setSortBy] = useState<'newest' | 'visits' | 'due' | 'regNo'>('newest');
 
   // Selected Patient for Details & History Modal
@@ -251,8 +254,26 @@ function PatientManagementContent() {
       const compiled = Array.from(patientMap.values()).map((p) => {
         const pRxs = rxs.filter((r) => r.regNo === p.regNo);
         const pApnts = apnts.filter((a) => a.regNo === p.regNo);
+        const pSessions = sessions.filter((s) => s.regNo === p.regNo);
         const totalVisits = Math.max(pRxs.length, pApnts.length, p.totalVisits || 1);
         const totalDue = Math.max(0, (p.totalBilled || 0) - (p.totalPaid || 0));
+
+        const latestRxWithNext = pRxs.find((r) => r.nextVisitDate && r.nextVisitDate.trim() !== '');
+        const upcomingApnt = pApnts.find((a) => a.status === 'Scheduled' || a.status === 'Confirmed' || (a as any).type === 'Follow-up');
+        const sessionWithNext = pSessions.find((s) => (s.nextDate && s.nextDate.trim() !== '') || s.followUpRequired);
+
+        const nextFollowUpDate =
+          latestRxWithNext?.nextVisitDate ||
+          upcomingApnt?.date ||
+          sessionWithNext?.nextDate ||
+          '';
+
+        const isFollowUp = Boolean(
+          nextFollowUpDate ||
+          (latestRxWithNext?.revisitText && latestRxWithNext.revisitText !== 'প্রয়োজন নেই') ||
+          upcomingApnt ||
+          sessionWithNext?.followUpRequired
+        );
 
         return {
           ...p,
@@ -260,6 +281,8 @@ function PatientManagementContent() {
           prescriptionsCount: pRxs.length,
           appointmentsCount: pApnts.length,
           totalDue,
+          nextFollowUpDate,
+          isFollowUp,
         };
       });
 
@@ -279,6 +302,11 @@ function PatientManagementContent() {
       .filter((p) => {
         // Gender filter
         if (genderFilter !== 'ALL' && p.sex !== genderFilter) return false;
+
+        // Schedule filter (New Schedule / 1st Visit vs Old Schedule / Revisit vs Follow-up)
+        if (scheduleFilter === 'NEW' && (p.totalVisits || 1) > 1) return false;
+        if (scheduleFilter === 'OLD' && (p.totalVisits || 1) <= 1) return false;
+        if (scheduleFilter === 'FOLLOW_UP' && !p.isFollowUp) return false;
 
         // Search query
         if (searchQuery.trim()) {
@@ -306,16 +334,19 @@ function PatientManagementContent() {
         }
         return 0;
       });
-  }, [patients, genderFilter, searchQuery, sortBy]);
+  }, [patients, genderFilter, scheduleFilter, searchQuery, sortBy]);
 
   // Aggregate Metrics
   const metrics = useMemo(() => {
     const totalCount = patients.length;
     const maleCount = patients.filter((p) => p.sex === 'M').length;
     const femaleCount = patients.filter((p) => p.sex === 'F').length;
+    const newScheduleCount = patients.filter((p) => (p.totalVisits || 1) <= 1).length;
+    const oldScheduleCount = patients.filter((p) => (p.totalVisits || 1) > 1).length;
+    const followUpCount = patients.filter((p) => p.isFollowUp).length;
     const totalRx = patients.reduce((acc, p) => acc + (p.prescriptionsCount || 0), 0);
     const totalDue = patients.reduce((acc, p) => acc + (p.totalDue || 0), 0);
-    return { totalCount, maleCount, femaleCount, totalRx, totalDue };
+    return { totalCount, maleCount, femaleCount, newScheduleCount, oldScheduleCount, followUpCount, totalRx, totalDue };
   }, [patients]);
 
   // Handle Save / Edit Patient Form
@@ -640,31 +671,84 @@ function PatientManagementContent() {
           />
         </div>
 
-        {/* Gender Filter Tabs */}
-        <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
+        {/* Gender & Schedule Filter Tabs */}
+        <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl">
           <button
-            onClick={() => setGenderFilter('ALL')}
+            onClick={() => {
+              setGenderFilter('ALL');
+              setScheduleFilter('ALL');
+            }}
             className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-              genderFilter === 'ALL' ? 'bg-white text-blue-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              genderFilter === 'ALL' && scheduleFilter === 'ALL'
+                ? 'bg-white text-blue-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             সব ({patients.length})
           </button>
           <button
-            onClick={() => setGenderFilter('M')}
-            className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-              genderFilter === 'M' ? 'bg-white text-blue-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+            onClick={() => setGenderFilter((prev) => (prev === 'M' ? 'ALL' : 'M'))}
+            className={`px-3 py-1.5 rounded-lg font-bold text-xs transition flex items-center space-x-1 ${
+              genderFilter === 'M'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            পুরুষ ({metrics.maleCount})
+            <span>পুরুষ</span>
+            <span className="text-[11px] font-mono opacity-80">({metrics.maleCount})</span>
           </button>
           <button
-            onClick={() => setGenderFilter('F')}
-            className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-              genderFilter === 'F' ? 'bg-white text-blue-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+            onClick={() => setGenderFilter((prev) => (prev === 'F' ? 'ALL' : 'F'))}
+            className={`px-3 py-1.5 rounded-lg font-bold text-xs transition flex items-center space-x-1 ${
+              genderFilter === 'F'
+                ? 'bg-rose-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            মহিলা ({metrics.femaleCount})
+            <span>মহিলা</span>
+            <span className="text-[11px] font-mono opacity-80">({metrics.femaleCount})</span>
+          </button>
+
+          <span className="w-[1px] h-4 bg-slate-300 mx-0.5"></span>
+
+          <button
+            onClick={() => setScheduleFilter((prev) => (prev === 'NEW' ? 'ALL' : 'NEW'))}
+            className={`px-3 py-1.5 rounded-lg font-bold text-xs transition flex items-center space-x-1 ${
+              scheduleFilter === 'NEW'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50'
+            }`}
+            title="নতুন রোগী / ১ম শিডিউল"
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            <span>নতুন শিডিউল</span>
+            <span className="text-[11px] font-mono opacity-90">({metrics.newScheduleCount})</span>
+          </button>
+          <button
+            onClick={() => setScheduleFilter((prev) => (prev === 'OLD' ? 'ALL' : 'OLD'))}
+            className={`px-3 py-1.5 rounded-lg font-bold text-xs transition flex items-center space-x-1 ${
+              scheduleFilter === 'OLD'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50'
+            }`}
+            title="পুরাতন রোগী / রি-ভিজিট শিডিউল"
+          >
+            <UserCheck className="w-3.5 h-3.5" />
+            <span>পুরাতন শিডিউল</span>
+            <span className="text-[11px] font-mono opacity-90">({metrics.oldScheduleCount})</span>
+          </button>
+          <button
+            onClick={() => setScheduleFilter((prev) => (prev === 'FOLLOW_UP' ? 'ALL' : 'FOLLOW_UP'))}
+            className={`px-3 py-1.5 rounded-lg font-bold text-xs transition flex items-center space-x-1 ${
+              scheduleFilter === 'FOLLOW_UP'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-purple-700 hover:text-purple-900 hover:bg-purple-50'
+            }`}
+            title="ফলো-আপ শিডিউল / পরবর্তী সাক্ষাতের শিডিউলকৃত রোগী"
+          >
+            <CalendarCheck className="w-3.5 h-3.5" />
+            <span>ফলো-আপ শিডিউল</span>
+            <span className="text-[11px] font-mono opacity-90">({metrics.followUpCount})</span>
           </button>
         </div>
 
@@ -757,10 +841,27 @@ function PatientManagementContent() {
                     {/* Visits Badge */}
                     <td className="p-3.5 text-center">
                       <div className="inline-flex flex-col items-center">
-                        <span className="px-2.5 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-full font-bold text-xs">
+                        <span className="px-2.5 py-0.5 bg-slate-100 border border-slate-200 text-slate-800 rounded-full font-bold text-xs">
                           {pt.totalVisits} বার
                         </span>
-                        <span className="text-[10px] text-slate-400 mt-0.5">
+                        {pt.totalVisits <= 1 ? (
+                          <span className="text-[9px] bg-emerald-50 border border-emerald-200 text-emerald-700 font-bold px-1.5 py-0.2 rounded mt-0.5 flex items-center gap-0.5">
+                            <span className="w-1 h-1 rounded-full bg-emerald-500"></span>
+                            নতুন শিডিউল
+                          </span>
+                        ) : (
+                          <span className="text-[9px] bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold px-1.5 py-0.2 rounded mt-0.5 flex items-center gap-0.5">
+                            <span className="w-1 h-1 rounded-full bg-indigo-500"></span>
+                            পুরাতন শিডিউল
+                          </span>
+                        )}
+                        {pt.isFollowUp && (
+                          <span className="text-[9px] bg-purple-50 border border-purple-200 text-purple-700 font-bold px-1.5 py-0.2 rounded mt-0.5 flex items-center gap-0.5" title={`পরবর্তী ফলো-আপ: ${pt.nextFollowUpDate || 'শিডিউলড'}`}>
+                            <CalendarCheck className="w-2.5 h-2.5 text-purple-600" />
+                            ফলো-আপ
+                          </span>
+                        )}
+                        <span className="text-[9px] text-slate-400 mt-0.5">
                           Rx: {pt.prescriptionsCount} | Apnt: {pt.appointmentsCount}
                         </span>
                       </div>

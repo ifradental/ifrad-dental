@@ -68,19 +68,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     try {
       // 1. Check in Dexie DB employees table
-      const allEmployees = await db.employees.toArray();
-      const matchedEmp = allEmployees.find((e) => {
-        const empUser = (e.username || '').trim().toLowerCase();
-        const empMobile = (e.mobile || '').trim();
-        const empMobileDigits = empMobile.replace(/[-\s]/g, '');
-        const empEmail = (e.email || '').trim().toLowerCase();
+      let allEmployees = await db.employees.toArray();
+      const findMatch = (list: typeof allEmployees) =>
+        list.find((e) => {
+          const empUser = (e.username || '').trim().toLowerCase();
+          const empMobile = (e.mobile || '').trim();
+          const empMobileDigits = empMobile.replace(/[-\s]/g, '');
+          const empEmail = (e.email || '').trim().toLowerCase();
 
-        const isUserMatch = Boolean(empUser && empUser === cleanInput);
-        const isMobileMatch = Boolean(empMobile && (empMobile === usernameOrMobile.trim() || empMobileDigits === rawMobile));
-        const isEmailMatch = Boolean(empEmail && empEmail === cleanInput);
+          const isUserMatch = Boolean(empUser && empUser === cleanInput);
+          const isMobileMatch = Boolean(
+            empMobile && (empMobile === usernameOrMobile.trim() || empMobileDigits === rawMobile)
+          );
+          const isEmailMatch = Boolean(empEmail && empEmail === cleanInput);
 
-        return isUserMatch || isMobileMatch || isEmailMatch;
-      });
+          return isUserMatch || isMobileMatch || isEmailMatch;
+        });
+
+      let matchedEmp = findMatch(allEmployees);
+
+      if (!matchedEmp) {
+        // Pull latest employees from MongoDB in case registered from another browser
+        await syncEngine.pullUpdates().catch(() => {});
+        allEmployees = await db.employees.toArray();
+        matchedEmp = findMatch(allEmployees);
+      }
 
       if (matchedEmp) {
         if (matchedEmp.status === 'Inactive') {

@@ -30,7 +30,9 @@ import {
   X,
   Cloud,
   Upload,
-  Sparkles
+  Sparkles,
+  ChevronDown,
+  Check
 } from 'lucide-react';
 import { 
   db, 
@@ -44,6 +46,117 @@ import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
 import { logActivity } from '@/lib/activityLogger';
 import ThermalTokenModal, { printThermalReceipt } from '@/components/appointments/ThermalTokenModal';
+
+const STANDARD_TIME_SLOTS_30MIN = [
+  '10:30 AM',
+  '11:00 AM',
+  '11:30 AM',
+  '12:00 PM',
+  '12:30 PM',
+  '01:00 PM',
+  '01:30 PM',
+  '02:00 PM',
+  '02:30 PM',
+  '03:00 PM',
+  '03:30 PM',
+  '04:00 PM',
+  '04:30 PM',
+  '05:00 PM',
+  '05:30 PM',
+  '06:00 PM',
+  '06:30 PM',
+  '07:00 PM',
+  '07:30 PM',
+  '08:00 PM',
+  '08:30 PM',
+  '09:00 PM',
+  '09:30 PM',
+  '10:00 PM',
+  '10:30 PM',
+];
+
+function parseTimeToMinutes(timeStr?: string): number {
+  if (!timeStr) return 9999;
+  const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  if (!match) return 9999;
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const period = (match[3] || '').toUpperCase();
+  if (period === 'PM' && hours < 12) hours += 12;
+  if (period === 'AM' && hours === 12) hours = 0;
+  return hours * 60 + minutes;
+}
+
+function TimeSlotPicker({
+  value,
+  onChange,
+  className = '',
+  placeholder = '10:30 AM',
+}: {
+  value: string;
+  onChange: (val: string) => void;
+  className?: string;
+  placeholder?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={containerRef} className={`relative ${className}`}>
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold text-slate-900 bg-white hover:border-blue-500 focus:outline-none focus:border-blue-600 cursor-pointer flex items-center justify-between shadow-xs transition"
+      >
+        <span className="flex items-center gap-1.5">
+          <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+          <span className="truncate">{value || placeholder}</span>
+        </span>
+        <ChevronDown className={`w-3.5 h-3.5 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 top-full mt-1 w-full min-w-[150px] bg-white border border-slate-200 rounded-xl shadow-2xl z-50 divide-y divide-slate-100 py-1">
+          {STANDARD_TIME_SLOTS_30MIN.map((slot) => {
+            const isSelected = value === slot;
+            return (
+              <button
+                key={slot}
+                type="button"
+                onClick={() => {
+                  onChange(slot);
+                  setIsOpen(false);
+                }}
+                className={`w-full text-left px-3 py-1.5 text-xs font-bold transition flex items-center justify-between cursor-pointer ${
+                  isSelected
+                    ? 'bg-blue-600 text-white font-black'
+                    : 'text-slate-700 hover:bg-blue-50 hover:text-blue-800'
+                }`}
+              >
+                <span>{slot}</span>
+                {isSelected && <Check className="w-3 h-3 text-white" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function AppointmentPage() {
   const router = useRouter();
@@ -74,13 +187,15 @@ export default function AppointmentPage() {
   const [rescheduleApnt, setRescheduleApnt] = useState<Appointment | null>(null);
   const [isRescheduleModalOpen, setIsRescheduleModalOpen] = useState<boolean>(false);
   const [rescheduleDate, setRescheduleDate] = useState<string>('');
-  const [rescheduleTime, setRescheduleTime] = useState<string>('10:00 AM');
+  const [rescheduleTime, setRescheduleTime] = useState<string>('10:30 AM');
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string>('');
   const [rescheduleDoctorName, setRescheduleDoctorName] = useState<string>('');
 
   // Filters
   const [viewFilter, setViewFilter] = useState<'today' | 'upcoming' | 'absent' | 'all'>('today');
   const [selectedDoctorFilter, setSelectedDoctorFilter] = useState<string>('All');
+  const [selectedSlotFilter, setSelectedSlotFilter] = useState<string>('ALL');
+  const [sortBy, setSortBy] = useState<'serial' | 'time_asc' | 'time_desc'>('serial');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Form State
@@ -94,7 +209,7 @@ export default function AppointmentPage() {
   const [assignedDoctorId, setAssignedDoctorId] = useState<string>('');
   const [assignedDoctorName, setAssignedDoctorName] = useState<string>('');
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [time, setTime] = useState<string>('10:00 AM');
+  const [time, setTime] = useState<string>('10:30 AM');
   const [reference, setReference] = useState<string>('');
   const [visitFee, setVisitFee] = useState<number>(500);
 
@@ -454,6 +569,7 @@ export default function AppointmentPage() {
       setMobile('');
       setAddress('');
       setProblem('');
+      setTime('10:30 AM');
       setReference('');
       setSearchRegOrPhone('');
       await loadAppointments();
@@ -542,7 +658,7 @@ export default function AppointmentPage() {
     const tomorrowStr = tomorrow.toISOString().split('T')[0];
     
     setRescheduleDate(apnt.date < todayStr ? todayStr : tomorrowStr);
-    setRescheduleTime(apnt.time || '10:00 AM');
+    setRescheduleTime(apnt.time || '10:30 AM');
     setRescheduleDoctorId(apnt.doctorId || '');
     setRescheduleDoctorName(apnt.doctorName || '');
     setIsRescheduleModalOpen(true);
@@ -633,7 +749,7 @@ export default function AppointmentPage() {
 
   // Filtered Appointments
   const filteredAppointments = useMemo(() => {
-    return appointments.filter((a) => {
+    let result = appointments.filter((a) => {
       // 1. Doctor Filter
       if (selectedDoctorFilter !== 'All') {
         const matchesDocId = a.doctorId && (a.doctorId === selectedDoctorFilter || (user && a.doctorId === user.employeeId));
@@ -661,7 +777,15 @@ export default function AppointmentPage() {
         if (!isPastUnattended && !isExplicitAbsent) return false;
       }
 
-      // 3. Search Query
+      // 3. Time Slot Filter
+      if (selectedSlotFilter !== 'ALL') {
+        const itemTime = (a.time || '').trim().toUpperCase();
+        if (!itemTime.includes(selectedSlotFilter.toUpperCase())) {
+          return false;
+        }
+      }
+
+      // 4. Search Query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesName = a.name.toLowerCase().includes(q);
@@ -673,7 +797,16 @@ export default function AppointmentPage() {
 
       return true;
     });
-  }, [appointments, user, viewFilter, selectedDoctorFilter, searchQuery, todayStr]);
+
+    // 5. Sorting
+    if (sortBy === 'time_asc') {
+      result.sort((a, b) => parseTimeToMinutes(a.time) - parseTimeToMinutes(b.time));
+    } else if (sortBy === 'time_desc') {
+      result.sort((a, b) => parseTimeToMinutes(b.time) - parseTimeToMinutes(a.time));
+    }
+
+    return result;
+  }, [appointments, user, viewFilter, selectedDoctorFilter, selectedSlotFilter, sortBy, searchQuery, todayStr]);
 
   // Metrics
   const metrics = useMemo(() => {
@@ -853,8 +986,8 @@ export default function AppointmentPage() {
 
       {/* APPOINTMENT ENTRY FORM (ONLY FOR RECEPTIONIST & ADMIN - HIDDEN FOR DOCTORS) */}
       {!isDoctorUser && (
-        <div className="bg-white rounded-xl border border-sky-200 shadow-sm overflow-hidden">
-          <div className="bg-gradient-to-r from-sky-50 to-blue-50 px-4 py-2.5 border-b border-sky-200 flex items-center justify-between">
+        <div className="bg-white rounded-xl border border-sky-200 shadow-sm">
+          <div className="bg-gradient-to-r from-sky-50 to-blue-50 rounded-t-xl px-4 py-2.5 border-b border-sky-200 flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <Plus className="w-4 h-4 text-blue-700" />
             <h2 className="text-xs font-bold text-blue-950">
@@ -1019,14 +1152,11 @@ export default function AppointmentPage() {
             </div>
 
             <div className="col-span-6 sm:col-span-2">
-              <label className="block text-slate-700 font-semibold mb-1">সময় / স্লট (Time)</label>
-              <input
-                type="text"
-                value={time}
-                onChange={(e) => setTime(e.target.value)}
-                placeholder="10:00 AM"
-                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs text-center font-bold focus:outline-none focus:border-blue-600"
-              />
+              <label className="block text-slate-700 font-semibold mb-1 flex items-center justify-between">
+                <span>সময় / স্লট (Time)</span>
+                <span className="text-[10px] text-blue-600 font-bold">১০:৩০ AM - ১০:৩০ PM</span>
+              </label>
+              <TimeSlotPicker value={time} onChange={setTime} />
             </div>
 
             {/* Reference */}
@@ -1154,7 +1284,42 @@ export default function AppointmentPage() {
           </select>
         </div>
 
-        {/* Search Input */}
+        {/* Time Slot Filter Dropdown */}
+        <div className="flex items-center space-x-1.5">
+          <span className="font-semibold text-slate-700 flex items-center gap-1">
+            <Clock className="w-3.5 h-3.5 text-indigo-600" />
+            <span>স্লট ফিল্টার:</span>
+          </span>
+          <select
+            value={selectedSlotFilter}
+            onChange={(e) => setSelectedSlotFilter(e.target.value)}
+            className="px-2 py-1.5 border border-slate-300 rounded-lg font-bold text-xs bg-white text-slate-900 focus:outline-none focus:border-blue-600 cursor-pointer"
+          >
+            <option value="ALL">সকল স্লট (All Time Slots)</option>
+            {STANDARD_TIME_SLOTS_30MIN.map((slot) => (
+              <option key={slot} value={slot}>
+                {slot}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Sort By Dropdown */}
+        <div className="flex items-center space-x-1.5">
+          <span className="font-semibold text-slate-700 flex items-center gap-1">
+            <Filter className="w-3.5 h-3.5 text-sky-600" />
+            <span>সাজান (Sort):</span>
+          </span>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            className="px-2 py-1.5 border border-slate-300 rounded-lg font-bold text-xs bg-white text-slate-900 focus:outline-none focus:border-blue-600 cursor-pointer"
+          >
+            <option value="serial">সিরিয়াল নং (Serial)</option>
+            <option value="time_asc">সময় আগে-পরে (Time: 10:30 AM → Night)</option>
+            <option value="time_desc">সময় পরে-আগে (Time: Night → 10:30 AM)</option>
+          </select>
+        </div>
         <div className="relative">
           <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
           <input
@@ -1477,16 +1642,14 @@ export default function AppointmentPage() {
 
               {/* New Time Slot */}
               <div>
-                <label className="block text-slate-700 font-bold mb-1">
-                  নতুন সময় / স্লট (Time Slot) <span className="text-red-500">*</span>
+                <label className="block text-slate-700 font-bold mb-1 flex items-center justify-between">
+                  <span>নতুন সময় / স্লট (Time Slot) <span className="text-red-500">*</span></span>
+                  <span className="text-[10px] text-indigo-600 font-bold">১০:৩০ AM - ১০:৩০ PM</span>
                 </label>
-                <input
-                  type="text"
-                  required
+                <TimeSlotPicker
                   value={rescheduleTime}
-                  onChange={(e) => setRescheduleTime(e.target.value)}
-                  placeholder="যেমন: 11:30 AM"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-600 bg-white"
+                  onChange={setRescheduleTime}
+                  placeholder="10:30 AM"
                 />
               </div>
 
