@@ -93,7 +93,7 @@ function PatientManagementContent() {
   const [printableRx, setPrintableRx] = useState<Prescription | null>(null);
   const [printableRxPatient, setPrintableRxPatient] = useState<Patient | null>(null);
 
-  // Follow-up (date-wise doctor suggestions & full clinical entry) Modal State
+  // Follow-up (date-wise doctor suggestions & clinical entry) Modal State
   const [followUpPatient, setFollowUpPatient] = useState<PatientWithStats | null>(null);
   const [followUpTab, setFollowUpTab] = useState<'entry' | 'timeline' | 'schedule'>('entry');
   const [followUpForm, setFollowUpForm] = useState({
@@ -1020,7 +1020,7 @@ function PatientManagementContent() {
                 <th className="p-3.5 w-28 text-center">মোট ভিজিট</th>
                 <th className="p-3.5 w-32 text-center">সর্বশেষ চিকিৎসা</th>
                 <th className="p-3.5 w-40 text-right">আর্থিক স্থিতি (Bill / Due)</th>
-                <th className="p-3.5 w-48 text-center">অ্যাকশন ও ইতিহাস</th>
+                <th className="p-3.5 min-w-[300px] text-center whitespace-nowrap">অ্যাকশন ও ইতিহাস</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -1146,7 +1146,7 @@ function PatientManagementContent() {
                           <span className="whitespace-nowrap">ইতিহাস</span>
                         </button>
 
-                        {/* Follow-up: schedule & date-wise doctor suggestions */}
+                        {/* Follow-up View: schedule & date-wise doctor suggestions */}
                         <button
                           type="button"
                           onClick={() => handleOpenFollowUp(pt, 'entry')}
@@ -1155,10 +1155,10 @@ function PatientManagementContent() {
                               ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white border border-purple-600 shadow-purple-200 ring-2 ring-purple-300'
                               : 'bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-300 hover:border-purple-400'
                           }`}
-                          title={pt.isFollowUp ? `ফলো-আপ নির্ধারিত: ${pt.nextFollowUpDate || 'শিডিউলড'} (ক্লিক করে বিস্তারিত দেখুন বা নতুন চিকিৎসা এন্ট্রি করুন)` : "নতুন ফলো-আপ শিডিউল নির্ধারণ বা ডাক্তারের পরামর্শ ও ওষুধ এন্ট্রি করুন"}
+                          title={pt.isFollowUp ? `ফলো-আপ নির্ধারিত: ${pt.nextFollowUpDate || 'শিডিউলড'} (ক্লিক করে বিস্তারিত দেখুন বা নতুন চিকিৎসা এন্ট্রি করুন)` : "নতুন ফলো-আপ শিডিউল নির্ধারণ বা ডাক্তারের পরামর্শ ও ওষুধ এন্ট্রি দেখুন"}
                         >
                           <CalendarCheck className={`w-3.5 h-3.5 shrink-0 ${pt.isFollowUp ? 'text-white' : 'text-purple-600'}`} />
-                          <span className="whitespace-nowrap">ফলো-আপ</span>
+                          <span className="whitespace-nowrap font-bold">ফলোআপ ভিউ</span>
                         </button>
 
                         {/* Make Prescription Link (Doctor & Admin only) */}
@@ -1242,10 +1242,6 @@ function PatientManagementContent() {
           'ইমপ্ল্যান্ট হিলিং ক্যাপ চেকিং',
           'জেনারেল ডেন্টাল চেকআপ ও কাউন্সেলিং',
         ];
-
-        const quickDoseTemplates = ['১+০+১', '১+১+১', '০+০+১', '১+০+০', '০+১+০', '১+১+১+১'];
-        const quickInstructions = ['খাওয়ার পর', 'খাবারের ২০ মিনিট আগে', 'কুসুম গরম পানির সাথে', 'ব্যথা হলে ভরা পেটে', 'রাতে ঘুমানোর আগে'];
-        const quickDurations = ['৩ দিন', '৫ দিন', '৭ দিন', '১০ দিন', '১৪ দিন', '১ মাস'];
 
         const commonDentalMeds = [
           { brand: 'Tab. Napa Extra 500+65mg', dose: '১+০+১', instruction: 'খাওয়ার পর', duration: '৩ দিন' },
