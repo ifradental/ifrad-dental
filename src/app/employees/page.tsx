@@ -78,13 +78,25 @@ export default function EmployeesPage() {
 
   useEffect(() => {
     loadEmployees();
-    syncEngine.pullUpdates().then(() => loadEmployees()).catch(() => {});
+    if (typeof syncEngine?.pullUpdates === 'function') {
+      syncEngine.pullUpdates().then(() => loadEmployees()).catch(() => {});
+    }
 
-    const unsub = syncEngine.onDataChange((cols) => {
+    const unsub = typeof syncEngine?.onDataChange === 'function'
+      ? syncEngine.onDataChange((cols) => {
+          if (!cols || cols.includes('employees')) {
+            loadEmployees();
+          }
+        })
+      : () => {};
+
+    const handleDataChanged = (e: any) => {
+      const cols = e?.detail?.collections;
       if (!cols || cols.includes('employees')) {
         loadEmployees();
       }
-    });
+    };
+    window.addEventListener('ifrad_data_changed', handleDataChanged);
 
     const handleFocus = () => {
       loadEmployees();
@@ -93,6 +105,7 @@ export default function EmployeesPage() {
 
     return () => {
       unsub();
+      window.removeEventListener('ifrad_data_changed', handleDataChanged);
       window.removeEventListener('focus', handleFocus);
     };
   }, []);

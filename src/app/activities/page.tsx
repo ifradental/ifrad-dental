@@ -54,13 +54,25 @@ export default function ActivitiesPage() {
 
   useEffect(() => {
     loadData();
-    syncEngine.pullUpdates().then(() => loadData()).catch(() => {});
+    if (typeof syncEngine?.pullUpdates === 'function') {
+      syncEngine.pullUpdates().then(() => loadData()).catch(() => {});
+    }
 
-    const unsub = syncEngine.onDataChange((cols) => {
+    const unsub = typeof syncEngine?.onDataChange === 'function'
+      ? syncEngine.onDataChange((cols) => {
+          if (!cols || cols.includes('employees')) {
+            loadData();
+          }
+        })
+      : () => {};
+
+    const handleDataChanged = (e: any) => {
+      const cols = e?.detail?.collections;
       if (!cols || cols.includes('employees')) {
         loadData();
       }
-    });
+    };
+    window.addEventListener('ifrad_data_changed', handleDataChanged);
 
     const handleFocus = () => {
       loadData();
@@ -69,6 +81,7 @@ export default function ActivitiesPage() {
 
     return () => {
       unsub();
+      window.removeEventListener('ifrad_data_changed', handleDataChanged);
       window.removeEventListener('focus', handleFocus);
     };
   }, []);

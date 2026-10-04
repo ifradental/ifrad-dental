@@ -5,14 +5,50 @@ export type SyncStatus = 'online' | 'offline' | 'syncing' | 'error';
 class SyncEngine {
   private status: SyncStatus = 'offline';
   private listeners: ((status: SyncStatus, pendingCount: number) => void)[] = [];
+  private dataListeners: ((collections?: string[]) => void)[] = [];
   private syncTimer: NodeJS.Timeout | null = null;
   private isSyncing = false;
+  private isPulling = false;
+  private broadcastChannel: BroadcastChannel | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
       this.status = navigator.onLine ? 'online' : 'offline';
       window.addEventListener('online', () => this.handleOnlineStatusChange(true));
       window.addEventListener('offline', () => this.handleOnlineStatusChange(false));
+
+      // Setup cross-tab broadcast channel
+      if (typeof BroadcastChannel !== 'undefined') {
+        try {
+          this.broadcastChannel = new BroadcastChannel('ifrad_sync_channel');
+          this.broadcastChannel.onmessage = (event) => {
+            if (event.data?.type === 'DATA_CHANGED') {
+              this.pullUpdates().catch(() => {});
+            }
+          };
+        } catch (e) {
+          console.warn('BroadcastChannel notice:', e);
+        }
+      }
+
+      // Listen to cross-tab localStorage events as fallback
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'ifrad_last_sync_broadcast') {
+          this.pullUpdates().catch(() => {});
+        }
+      });
+
+      // Pull updates immediately when tab gains focus or becomes visible
+      window.addEventListener('focus', () => {
+        if (navigator.onLine) {
+          this.pullUpdates().catch(() => {});
+        }
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && navigator.onLine) {
+          this.pullUpdates().catch(() => {});
+        }
+      });
 
       // Initial auto-pull, admin sync, and trigger on startup
       setTimeout(async () => {
@@ -21,14 +57,19 @@ class SyncEngine {
           this.pullUpdates().catch(() => {});
           this.triggerSync().catch(() => {});
         }
-      }, 1500);
+      }, 500);
 
-      // Periodic sync loop every 15 seconds
+      // Fast reactive sync loop every 3.5 seconds across all browsers
       this.syncTimer = setInterval(() => {
-        if (navigator.onLine && !this.isSyncing) {
-          this.triggerSync();
+        if (navigator.onLine) {
+          if (!this.isSyncing) {
+            this.triggerSync().catch(() => {});
+          }
+          if (!this.isPulling) {
+            this.pullUpdates().catch(() => {});
+          }
         }
-      }, 15000);
+      }, 3500);
     }
   }
 
@@ -38,6 +79,45 @@ class SyncEngine {
     return () => {
       this.listeners = this.listeners.filter((l) => l !== callback);
     };
+  }
+
+  public onDataChange(callback: (collections?: string[]) => void): () => void {
+    this.dataListeners.push(callback);
+    return () => {
+      this.dataListeners = this.dataListeners.filter((l) => l !== callback);
+    };
+  }
+
+  public notifyDataChange(collections?: string[]) {
+    this.dataListeners.forEach((cb) => {
+      try {
+        cb(collections);
+      } catch (e) {
+        console.error('Error in onDataChange listener:', e);
+      }
+    });
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ifrad_data_changed', {
+          detail: { collections, timestamp: Date.now() },
+        })
+      );
+
+      if (this.broadcastChannel) {
+        try {
+          this.broadcastChannel.postMessage({
+            type: 'DATA_CHANGED',
+            collections,
+            timestamp: Date.now(),
+          });
+        } catch (_) {}
+      }
+
+      try {
+        localStorage.setItem('ifrad_last_sync_broadcast', Date.now().toString());
+      } catch (_) {}
+    }
   }
 
   private async notify() {
@@ -72,10 +152,11 @@ class SyncEngine {
 
     await db.syncQueue.add(syncItem);
     await this.notify();
+    this.notifyDataChange([collection]);
 
     // If online, immediately try to sync to MongoDB
     if (navigator.onLine) {
-      this.triggerSync();
+      this.triggerSync().catch(() => {});
     }
   }
 
@@ -205,9 +286,12 @@ class SyncEngine {
   }
 
   /**
-   * Pulls latest updates from MongoDB to local Dexie cache
+   * Pulls latest updates from MongoDB to local Dexie cache and prunes deleted records
    */
   public async pullUpdates(): Promise<{ success: boolean; pulledCount: number }> {
+    if (this.isPulling) return { success: true, pulledCount: 0 };
+    this.isPulling = true;
+
     try {
       const settings = await db.settings.get('default_settings');
       const syncUrl =
@@ -220,66 +304,93 @@ class SyncEngine {
         : 0;
 
       const res = await fetch(`${syncUrl}/pull?since=${lastSyncTime}`);
-      if (!res.ok) return { success: false, pulledCount: 0 };
+      if (!res.ok) {
+        this.isPulling = false;
+        return { success: false, pulledCount: 0 };
+      }
 
       const data = await res.json();
-      if (!data.updates) return { success: true, pulledCount: 0 };
+      if (!data.updates) {
+        this.isPulling = false;
+        return { success: true, pulledCount: 0 };
+      }
 
       let totalPulled = 0;
+      const changedCollections: string[] = [];
 
-      if (data.updates.patients?.length) {
-        await db.patients.bulkPut(data.updates.patients);
-        totalPulled += data.updates.patients.length;
+      // 1. Process updates
+      const tables: { key: string; table: any }[] = [
+        { key: 'patients', table: db.patients },
+        { key: 'prescriptions', table: db.prescriptions },
+        { key: 'appointments', table: db.appointments },
+        { key: 'payments', table: db.payments },
+        { key: 'treatmentSessions', table: db.treatmentSessions },
+        { key: 'employees', table: db.employees },
+        { key: 'drugs', table: db.drugs },
+        { key: 'templates', table: db.templates },
+        { key: 'materials', table: db.materials },
+        { key: 'stockEntries', table: db.stockEntries },
+        { key: 'materialUsages', table: db.materialUsages },
+        { key: 'expenses', table: db.expenses },
+      ];
+
+      for (const { key, table } of tables) {
+        const records = data.updates[key];
+        if (records && records.length > 0) {
+          await table.bulkPut(records);
+          totalPulled += records.length;
+          changedCollections.push(key);
+        }
       }
-      if (data.updates.prescriptions?.length) {
-        await db.prescriptions.bulkPut(data.updates.prescriptions);
-        totalPulled += data.updates.prescriptions.length;
-      }
-      if (data.updates.appointments?.length) {
-        await db.appointments.bulkPut(data.updates.appointments);
-        totalPulled += data.updates.appointments.length;
-      }
-      if (data.updates.payments?.length) {
-        await db.payments.bulkPut(data.updates.payments);
-        totalPulled += data.updates.payments.length;
-      }
-      if (data.updates.treatmentSessions?.length) {
-        await db.treatmentSessions.bulkPut(data.updates.treatmentSessions);
-        totalPulled += data.updates.treatmentSessions.length;
-      }
-      if (data.updates.employees?.length) {
-        await db.employees.bulkPut(data.updates.employees);
-        totalPulled += data.updates.employees.length;
-      }
-      if (data.updates.drugs?.length) {
-        await db.drugs.bulkPut(data.updates.drugs);
-        totalPulled += data.updates.drugs.length;
-      }
-      if (data.updates.templates?.length) {
-        await db.templates.bulkPut(data.updates.templates);
-        totalPulled += data.updates.templates.length;
-      }
-      if (data.updates.materials?.length) {
-        await db.materials.bulkPut(data.updates.materials);
-        totalPulled += data.updates.materials.length;
-      }
-      if (data.updates.expenses?.length) {
-        await db.expenses.bulkPut(data.updates.expenses);
-        totalPulled += data.updates.expenses.length;
-      }
+
       if (data.updates.settings?.length) {
         for (const s of data.updates.settings) {
           await db.settings.put(s);
         }
+        changedCollections.push('settings');
       }
 
-      if (totalPulled > 0) {
-        console.log(`📥 Ingested ${totalPulled} updated records from MongoDB into local cache.`);
+      // 2. Process deletions using server's allIds list
+      if (data.allIds) {
+        const pendingItems = await db.syncQueue.where('status').equals('PENDING').toArray();
+        const pendingDocIds = new Set(pendingItems.map((item) => item.documentId));
+
+        for (const { key, table } of tables) {
+          const serverIdList = data.allIds[key];
+          if (Array.isArray(serverIdList)) {
+            const serverIdSet = new Set(serverIdList);
+            const localRecords = await table.toArray();
+            const staleLocalIds: string[] = [];
+
+            for (const item of localRecords) {
+              if (item.id && !serverIdSet.has(item.id) && !pendingDocIds.has(item.id)) {
+                staleLocalIds.push(item.id);
+              }
+            }
+
+            if (staleLocalIds.length > 0) {
+              await table.bulkDelete(staleLocalIds);
+              changedCollections.push(key);
+            }
+          }
+        }
       }
 
+      // Update settings lastSyncedAt
+      if (data.pulledAt) {
+        await db.settings.update('default_settings', {
+          lastSyncedAt: data.pulledAt,
+        }).catch(() => {});
+      }
+
+      if (changedCollections.length > 0) {
+        this.notifyDataChange(changedCollections);
+      }
+
+      this.isPulling = false;
       return { success: true, pulledCount: totalPulled };
     } catch (e: any) {
-      console.warn('Pull updates skipped or failed:', e.message);
+      this.isPulling = false;
       return { success: false, pulledCount: 0 };
     }
   }
