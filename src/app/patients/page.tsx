@@ -42,7 +42,6 @@ import {
   db, 
   type Patient, 
   type Prescription, 
-  type MedicineItem,
   type Appointment, 
   type PaymentRecord, 
   type TreatmentSession, 
@@ -93,22 +92,14 @@ function PatientManagementContent() {
   const [printableRx, setPrintableRx] = useState<Prescription | null>(null);
   const [printableRxPatient, setPrintableRxPatient] = useState<Patient | null>(null);
 
-  // Follow-up (date-wise doctor suggestions & clinical entry) Modal State
+  // Follow-up (date-wise doctor suggestions & schedule) Modal State
   const [followUpPatient, setFollowUpPatient] = useState<PatientWithStats | null>(null);
-  const [followUpTab, setFollowUpTab] = useState<'entry' | 'timeline' | 'schedule'>('entry');
+  const [followUpTab, setFollowUpTab] = useState<'schedule' | 'timeline'>('schedule');
   const [followUpForm, setFollowUpForm] = useState({
-    visitDate: new Date().toISOString().split('T')[0],
+    date: '',
+    time: '05:00 PM',
+    procedure: 'ফলো-আপ চেকআপ ও পরবর্তী সিটিং',
     doctorName: '',
-    complaints: '',
-    diagnosis: '',
-    treatmentDone: 'RCT ২য় সিটিং ও ড্রেসিং পরিবর্তন',
-    treatmentPlan: '',
-    medicines: [
-      { no: 1, brand: '', dose: '১+০+১', instruction: 'খাওয়ার পর', duration: '৫ দিন' }
-    ] as MedicineItem[],
-    advice: 'কুসুম গরম পানিতে লবণ দিয়ে কুলকুচি করবেন। শক্ত খাবার খাওয়া থেকে বিরত থাকুন।',
-    nextVisitDate: '',
-    nextVisitTime: '05:00 PM',
     notes: '',
   });
   const [isSavingFollowUp, setIsSavingFollowUp] = useState<boolean>(false);
@@ -594,191 +585,98 @@ function PatientManagementContent() {
   }, [selectedPatientPrescriptions]);
 
   // Open Follow-up Modal & Preload Form
-  const handleOpenFollowUp = (pt: PatientWithStats, tab: 'entry' | 'timeline' | 'schedule' = 'entry') => {
+  const handleOpenFollowUp = (pt: PatientWithStats, tab: 'schedule' | 'timeline' = 'schedule') => {
     setFollowUpPatient(pt);
     setFollowUpTab(tab);
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    let defDate = pt.nextFollowUpDate || '';
+    if (!defDate) {
+      const d = new Date();
+      d.setDate(d.getDate() + 7);
+      defDate = d.toISOString().split('T')[0];
+    }
+
     const pRxs = allPrescriptions.filter((r) => r.regNo === pt.regNo);
     const latestRx = pRxs[0];
     const doctor = latestRx?.doctorName || clinicSettings?.doctor1?.name || user?.name || 'Dr. Ifrad';
 
-    const nextD = new Date();
-    nextD.setDate(nextD.getDate() + 7);
-    const defNextDate = pt.nextFollowUpDate || nextD.toISOString().split('T')[0];
-
-    // Pre-populate last medicines if available or fresh empty row
-    const defaultMeds: MedicineItem[] = latestRx?.medicines && latestRx.medicines.length > 0
-      ? latestRx.medicines.map((m, idx) => ({ ...m, no: idx + 1 }))
-      : [{ no: 1, brand: '', dose: '১+০+১', instruction: 'খাওয়ার পর', duration: '৫ দিন' }];
-
     setFollowUpForm({
-      visitDate: todayStr,
+      date: defDate,
+      time: latestRx?.timeSlot || '05:00 PM',
+      procedure: 'ফলো-আপ চেকআপ ও পরবর্তী সিটিং',
       doctorName: doctor,
-      complaints: latestRx?.cc?.[0] || 'ফলো-আপ চেকআপ ও পরবর্তী সিটিং',
-      diagnosis: latestRx?.dx?.[0] || '',
-      treatmentDone: 'RCT ২য় সিটিং ও ড্রেসিং পরিবর্তন',
-      treatmentPlan: latestRx?.treatmentPlan?.[0] || '',
-      medicines: defaultMeds,
-      advice: latestRx?.advice?.[0] || 'কুসুম গরম পানিতে লবণ দিয়ে কুলকুচি করবেন। শক্ত খাবার খাওয়া থেকে বিরত থাকুন।',
-      nextVisitDate: defNextDate,
-      nextVisitTime: latestRx?.timeSlot || '05:00 PM',
       notes: '',
-    });
-  };
-
-  const handleAddMedicineRow = () => {
-    setFollowUpForm((prev) => ({
-      ...prev,
-      medicines: [
-        ...prev.medicines,
-        { no: prev.medicines.length + 1, brand: '', dose: '১+০+১', instruction: 'খাওয়ার পর', duration: '৫ দিন' }
-      ]
-    }));
-  };
-
-  const handleRemoveMedicineRow = (index: number) => {
-    setFollowUpForm((prev) => ({
-      ...prev,
-      medicines: prev.medicines.filter((_, i) => i !== index).map((m, i) => ({ ...m, no: i + 1 }))
-    }));
-  };
-
-  const handleUpdateMedicineRow = (index: number, field: keyof MedicineItem, value: any) => {
-    setFollowUpForm((prev) => {
-      const updated = [...prev.medicines];
-      updated[index] = { ...updated[index], [field]: value };
-      return { ...prev, medicines: updated };
-    });
-  };
-
-  const handleAddPresetMedicine = (preset: { brand: string; dose: string; instruction: string; duration: string }) => {
-    setFollowUpForm((prev) => {
-      if (prev.medicines.length === 1 && !prev.medicines[0].brand.trim()) {
-        return {
-          ...prev,
-          medicines: [{ no: 1, ...preset }]
-        };
-      }
-      return {
-        ...prev,
-        medicines: [...prev.medicines, { no: prev.medicines.length + 1, ...preset }]
-      };
     });
   };
 
   const handleSetQuickDate = (daysToAdd: number) => {
     const d = new Date();
     d.setDate(d.getDate() + daysToAdd);
-    setFollowUpForm((prev) => ({ ...prev, nextVisitDate: d.toISOString().split('T')[0] }));
+    setFollowUpForm((prev) => ({ ...prev, date: d.toISOString().split('T')[0] }));
   };
 
   const handleSaveFollowUp = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!followUpPatient) return;
-    if (!followUpForm.visitDate) {
-      alert('অনুগ্রহ করে ফলো-আপ সম্পন্ন করার তারিখ নির্বাচন করুন!');
+    if (!followUpForm.date) {
+      alert('অনুগ্রহ করে ফলো-আপের তারিখ নির্বাচন করুন!');
       return;
     }
 
     setIsSavingFollowUp(true);
     try {
-      const pRxs = allPrescriptions.filter((r) => r.regNo === followUpPatient.regNo);
-      const visitNo = pRxs.length + 1;
-      const rxId = `rx_fu_${Date.now()}`;
-
-      // Clean medicines
-      const cleanMeds = (followUpForm.medicines || [])
-        .filter((m) => m.brand && m.brand.trim() !== '')
-        .map((m, i) => ({ ...m, no: i + 1 }));
-
-      const newRx: Prescription = {
-        id: rxId,
+      const apntId = `apnt_${Date.now()}`;
+      const newAppointment: Appointment = {
+        id: apntId,
         regNo: followUpPatient.regNo,
-        patientId: followUpPatient.id || `p_${followUpPatient.regNo}`,
-        patientName: followUpPatient.name,
-        age: followUpPatient.age || 'N/A',
+        name: followUpPatient.name,
+        age: followUpPatient.age || '',
         sex: followUpPatient.sex || 'M',
         mobile: followUpPatient.mobile || '',
         address: followUpPatient.address || '',
-        occupation: followUpPatient.occupation || '',
-        date: followUpForm.visitDate,
-        visitNo: visitNo,
-        cc: followUpForm.complaints ? [followUpForm.complaints.trim()] : ['ফলো-আপ ভিজিট'],
-        ho: {},
-        hoCustomText: '',
-        oe: [],
-        ix: [],
-        dd: [],
-        dx: followUpForm.diagnosis ? [followUpForm.diagnosis.trim()] : [],
-        treatmentPlan: followUpForm.treatmentPlan ? [followUpForm.treatmentPlan.trim()] : [],
-        treatmentDone: followUpForm.treatmentDone ? [followUpForm.treatmentDone.trim()] : ['ফলো-আপ চিকিৎসা সম্পন্ন'],
-        specialNote: followUpForm.notes ? [followUpForm.notes.trim()] : [],
-        drugHistory: [],
-        medicines: cleanMeds,
-        advice: followUpForm.advice ? [followUpForm.advice.trim()] : [],
-        nextVisitDate: followUpForm.nextVisitDate || '',
-        revisitText: followUpForm.nextVisitDate ? 'প্রয়োজন আছে' : 'প্রয়োজন নেই',
-        timeSlot: followUpForm.nextVisitTime || '05:00 PM',
-        doctorName: followUpForm.doctorName || clinicSettings?.doctor1?.name || 'Dr. Ifrad',
+        problem: `ফলো-আপ: ${followUpForm.procedure || 'চেকআপ'}${followUpForm.notes ? ` - ${followUpForm.notes}` : ''}`,
+        doctorName: followUpForm.doctorName || clinicSettings?.doctor1?.name || 'Doctor',
+        date: followUpForm.date,
+        time: followUpForm.time || '05:00 PM',
+        paid: 0,
+        visitFee: 0,
+        status: 'Scheduled',
+        serial: 1,
+        apntNo: `AP-${followUpPatient.regNo}-${Date.now().toString().slice(-4)}`,
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
       };
 
-      // 1. Save prescription in Dexie and sync
-      await db.prescriptions.put(newRx);
-      await syncEngine.logMutation('prescriptions', 'INSERT', newRx.id, newRx);
+      await db.appointments.put(newAppointment);
+      await syncEngine.logMutation('appointments', 'INSERT', newAppointment.id, newAppointment);
 
-      // 2. If next follow-up date is provided, create/update scheduled appointment
-      if (followUpForm.nextVisitDate && followUpForm.nextVisitDate.trim()) {
-        const apntId = `apnt_${Date.now()}`;
-        const newAppointment: Appointment = {
-          id: apntId,
-          regNo: followUpPatient.regNo,
-          name: followUpPatient.name,
-          age: followUpPatient.age || '',
-          sex: followUpPatient.sex || 'M',
-          mobile: followUpPatient.mobile || '',
-          address: followUpPatient.address || '',
-          problem: `পরবর্তী ফলো-আপ: ${followUpForm.treatmentDone || 'চেকআপ'}`,
-          doctorName: followUpForm.doctorName || clinicSettings?.doctor1?.name || 'Doctor',
-          date: followUpForm.nextVisitDate,
-          time: followUpForm.nextVisitTime || '05:00 PM',
-          paid: 0,
-          visitFee: 0,
-          status: 'Scheduled',
-          serial: 1,
-          apntNo: `AP-${followUpPatient.regNo}-${Date.now().toString().slice(-4)}`,
-          createdAt: new Date().toISOString(),
-          prescriptionId: newRx.id,
+      // Also update nextVisitDate on latest prescription if present
+      const pRxs = allPrescriptions.filter((r) => r.regNo === followUpPatient.regNo);
+      if (pRxs.length > 0) {
+        const latestRx = pRxs[0];
+        const updatedRx = {
+          ...latestRx,
+          nextVisitDate: followUpForm.date,
+          timeSlot: followUpForm.time || latestRx.timeSlot,
+          updatedAt: new Date().toISOString(),
         };
-        await db.appointments.put(newAppointment);
-        await syncEngine.logMutation('appointments', 'INSERT', newAppointment.id, newAppointment);
+        await db.prescriptions.put(updatedRx);
+        await syncEngine.logMutation('prescriptions', 'UPDATE', updatedRx.id, updatedRx);
       }
 
       logActivity({
         action: 'SCHEDULE_FOLLOW_UP',
         module: 'Appointment',
-        description: `ফলো-আপ ও চিকিৎসার বিবরণ যুক্ত করা হয়েছে: #${followUpPatient.regNo} (${followUpPatient.name}) - তারিখ: ${followUpForm.visitDate} | ডাক্তার: ${followUpForm.doctorName}`,
-        metadata: {
-          regNo: followUpPatient.regNo,
-          name: followUpPatient.name,
-          date: followUpForm.visitDate,
-          doctorName: followUpForm.doctorName,
-          treatmentDone: followUpForm.treatmentDone,
-          medicinesCount: cleanMeds.length,
-          nextVisitDate: followUpForm.nextVisitDate,
-        },
+        description: `ফলো-আপ শিডিউল নির্ধারণ: #${followUpPatient.regNo} (${followUpPatient.name}) - ${followUpForm.date} (${followUpForm.time})`,
+        metadata: { regNo: followUpPatient.regNo, name: followUpPatient.name, date: followUpForm.date, time: followUpForm.time, procedure: followUpForm.procedure },
         user: user || undefined,
       });
 
       syncEngine.triggerSync().catch(console.warn);
       await loadAllData();
-      alert(`রোগী #${followUpPatient.regNo} (${followUpPatient.name}) এর ফলো-আপ ও চিকিৎসার বিবরণ সফলভাবে সংরক্ষিত হয়েছে!\nতারিখ: ${followUpForm.visitDate}\nচিকিৎসা: ${followUpForm.treatmentDone || 'ফলো-আপ'}\nওষুধ: ${cleanMeds.length} টি`);
-      setFollowUpTab('timeline');
+      alert(`রোগী #${followUpPatient.regNo} (${followUpPatient.name}) এর ফলো-আপ সফলভাবে সংরক্ষণ করা হয়েছে!\nতারিখ: ${followUpForm.date}\nসময়: ${followUpForm.time}`);
     } catch (err) {
       console.error('Error saving follow-up:', err);
-      alert('ফলো-আপ বিবরণ সংরক্ষণে সমস্যা হয়েছে!');
+      alert('ফলো-আপ সংরক্ষণে সমস্যা হয়েছে!');
     } finally {
       setIsSavingFollowUp(false);
     }
@@ -1020,7 +918,7 @@ function PatientManagementContent() {
                 <th className="p-3.5 w-28 text-center">মোট ভিজিট</th>
                 <th className="p-3.5 w-32 text-center">সর্বশেষ চিকিৎসা</th>
                 <th className="p-3.5 w-40 text-right">আর্থিক স্থিতি (Bill / Due)</th>
-                <th className="p-3.5 min-w-[300px] text-center whitespace-nowrap">অ্যাকশন ও ইতিহাস</th>
+                <th className="p-3.5 w-48 text-center">অ্যাকশন ও ইতিহাস</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -1133,32 +1031,32 @@ function PatientManagementContent() {
                     </td>
 
                     {/* Actions */}
-                    <td className="p-3.5 text-center whitespace-nowrap">
-                      <div className="flex items-center justify-center space-x-1.5 flex-nowrap whitespace-nowrap">
+                    <td className="p-3.5 text-center">
+                      <div className="flex items-center justify-center space-x-1.5">
                         {/* Details & History Button */}
                         <button
                           type="button"
                           onClick={() => setSelectedPatient(pt)}
-                          className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-lg font-bold text-xs transition inline-flex items-center space-x-1 shadow-xs cursor-pointer whitespace-nowrap shrink-0"
+                          className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-lg font-bold text-xs transition inline-flex items-center gap-1 shadow-xs cursor-pointer whitespace-nowrap shrink-0"
                           title="রোগীর বিস্তারিত ইতিহাস ও প্রেসক্রিপশন দেখুন"
                         >
-                          <Eye className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                          <span className="whitespace-nowrap">ইতিহাস</span>
+                          <Eye className="w-3.5 h-3.5 text-blue-600" />
+                          <span>ইতিহাস</span>
                         </button>
 
-                        {/* Follow-up View: schedule & date-wise doctor suggestions */}
+                        {/* Follow-up: View & Schedule */}
                         <button
                           type="button"
-                          onClick={() => handleOpenFollowUp(pt, 'entry')}
-                          className={`px-3 py-1.5 rounded-lg font-bold text-xs transition inline-flex items-center space-x-1.5 shadow-xs cursor-pointer whitespace-nowrap shrink-0 ${
+                          onClick={() => handleOpenFollowUp(pt, 'timeline')}
+                          className={`px-2.5 py-1.5 rounded-lg font-bold text-xs transition inline-flex items-center gap-1 shadow-xs cursor-pointer whitespace-nowrap shrink-0 ${
                             pt.isFollowUp
-                              ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white border border-purple-600 shadow-purple-200 ring-2 ring-purple-300'
-                              : 'bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-300 hover:border-purple-400'
+                              ? 'bg-purple-600 hover:bg-purple-700 text-white border border-purple-700 ring-2 ring-purple-200'
+                              : 'bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200'
                           }`}
-                          title={pt.isFollowUp ? `ফলো-আপ নির্ধারিত: ${pt.nextFollowUpDate || 'শিডিউলড'} (ক্লিক করে বিস্তারিত দেখুন বা নতুন চিকিৎসা এন্ট্রি করুন)` : "নতুন ফলো-আপ শিডিউল নির্ধারণ বা ডাক্তারের পরামর্শ ও ওষুধ এন্ট্রি দেখুন"}
+                          title={pt.isFollowUp ? `ফলো-আপ নির্ধারিত: ${pt.nextFollowUpDate || 'শিডিউলড'}` : "ফলোআপ ভিউ ও নতুন ফলোআপ শিডিউল"}
                         >
-                          <CalendarCheck className={`w-3.5 h-3.5 shrink-0 ${pt.isFollowUp ? 'text-white' : 'text-purple-600'}`} />
-                          <span className="whitespace-nowrap font-bold">ফলোআপ ভিউ</span>
+                          <CalendarCheck className={`w-3.5 h-3.5 ${pt.isFollowUp ? 'text-white' : 'text-purple-600'}`} />
+                          <span>ফলোআপ ভিউ</span>
                         </button>
 
                         {/* Make Prescription Link (Doctor & Admin only) */}
@@ -1207,7 +1105,7 @@ function PatientManagementContent() {
       </div>
 
       {/* =========================================================================
-          FOLLOW-UP MODAL: CLINICAL ENTRY, MEDICINES, AND DATE-WISE DOCTOR SUGGESTIONS
+          FOLLOW-UP MODAL: SCHEDULE & DATE-WISE DOCTOR SUGGESTIONS
           ========================================================================= */}
       {followUpPatient && (() => {
         const visits = allPrescriptions
@@ -1228,43 +1126,16 @@ function PatientManagementContent() {
           { label: 'উপদেশ (Advice)', key: 'advice' },
         ];
 
-        const quickProcedures = [
-          'RCT ২য় সিটিং ও ড্রেসিং পরিবর্তন',
-          'RCT ৩য় সিটিং ও অবচুরেশন সম্পন্ন',
-          'ক্রাউন / ক্যাপ ট্রায়াল সম্পন্ন',
-          'স্থায়ী ক্যাপ সিমেন্টেশন ও ফিটিং',
-          'সেলাই কাটা ও অ্যান্টিসেপটিক ওয়াশ',
-          'ড্রেসিং পরিবর্তন ও মেডিসিন প্লেসমেন্ট',
-          'লাইট কিউর ফিলিং ও পলিশিং',
-          'আল্ট্রাসনিক স্কেলিং ও রুট প্ল্যানিং',
-          'দাঁত তোলার পর পোস্ট-অপ চেক ও কেয়ার',
-          'অর্থোডন্টিক তার অ্যাডজাস্টমেন্ট ও টাইট',
-          'ইমপ্ল্যান্ট হিলিং ক্যাপ চেকিং',
-          'জেনারেল ডেন্টাল চেকআপ ও কাউন্সেলিং',
-        ];
-
-        const commonDentalMeds = [
-          { brand: 'Tab. Napa Extra 500+65mg', dose: '১+০+১', instruction: 'খাওয়ার পর', duration: '৩ দিন' },
-          { brand: 'Tab. Maxpro 20mg', dose: '১+০+১', instruction: 'খাবারের ২০ মিনিট আগে', duration: '৭ দিন' },
-          { brand: 'Tab. Flamyd 400mg', dose: '১+০+১', instruction: 'খাওয়ার পর', duration: '৫ দিন' },
-          { brand: 'Cap. Moxacil 500mg', dose: '১+১+১', instruction: 'খাওয়ার পর', duration: '৫ দিন' },
-          { brand: 'Tab. Ciprocin 500mg', dose: '১+০+১', instruction: 'খাওয়ার পর', duration: '৫ দিন' },
-          { brand: 'Tab. Rolac 10mg', dose: '১+০+১', instruction: 'ব্যথা হলে ভরা পেটে', duration: '৩ দিন' },
-          { brand: 'Clohex Mouthwash 0.2%', dose: '১০ মিলি দিনে ২ বার', instruction: 'খাওয়ার পর কুলকুচি', duration: '৭ দিন' },
-          { brand: 'Tab. Fixim 200mg', dose: '১+০+১', instruction: 'খাওয়ার পর', duration: '৭ দিন' },
-        ];
-
-        const quickAdvices = [
-          'কুসুম গরম পানিতে লবণ দিয়ে দিনে ৩-৪ বার কুলকুচি করবেন।',
-          'চিকিৎসাকৃত দাঁতের দিকে শক্ত বা আঠালো খাবার চিবাবেন না।',
-          'নরম ও স্বাভাবিক তাপমাত্রার খাবার গ্রহণ করুন।',
-          'ধূমপান ও পান-জর্দা খাওয়া সম্পূর্ণরূপে পরিহার করুন।',
-          'নিয়মিত দিনে দুইবার নরম ব্রাশ দিয়ে আলতোভাবে দাঁত পরিষ্কার করবেন।',
+        const quickTimes = [
+          '10:00 AM',
+          '12:30 PM',
+          '05:00 PM',
+          '07:00 PM',
         ];
 
         return (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[96vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[95vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
               {/* Modal Header */}
               <div className="bg-gradient-to-r from-purple-800 via-indigo-800 to-purple-900 text-white px-5 py-3.5 flex items-center justify-between shrink-0 shadow-sm">
                 <div className="flex items-center gap-3">
@@ -1274,7 +1145,7 @@ function PatientManagementContent() {
                   <div>
                     <div className="flex items-center gap-2">
                       <h3 className="font-black text-base text-white">
-                        ফলো-আপ ও ডাক্তারের পরামর্শ ব্যবস্থাপনা
+                        ফলো-আপ ব্যবস্থাপনা (Follow-up)
                       </h3>
                       <span className="px-2 py-0.5 bg-yellow-400 text-slate-900 font-mono font-black text-xs rounded-md">
                         Reg #{followUpPatient.regNo}
@@ -1288,7 +1159,7 @@ function PatientManagementContent() {
                       <span>{followUpPatient.age || 'বয়স N/A'} ({followUpPatient.sex === 'F' ? 'নারী' : 'পুরুষ'})</span>
                       <span>•</span>
                       <span className="bg-purple-950/60 px-2 py-0.5 rounded text-[11px] text-purple-200 border border-purple-500/30">
-                        মোট পূর্ববর্তী ভিজিট: {visits.length} টি
+                        মোট ভিজিট: {visits.length}
                       </span>
                     </p>
                   </div>
@@ -1303,341 +1174,141 @@ function PatientManagementContent() {
                 </button>
               </div>
 
-              {/* Modal Tab Navigation */}
-              <div className="flex items-center border-b border-slate-200 bg-slate-100/90 px-4 pt-2 shrink-0 gap-2 overflow-x-auto">
+              {/* Modal Tab Navigation: ফলোআপ অ্যাড / ফলোআপ ভিউ */}
+              <div className="flex items-center border-b border-slate-200 bg-slate-100/80 px-4 pt-2 shrink-0 gap-2">
                 <button
                   type="button"
-                  onClick={() => setFollowUpTab('entry')}
-                  className={`px-4 py-2.5 font-bold text-xs sm:text-sm rounded-t-xl transition flex items-center gap-2 cursor-pointer border-t-2 whitespace-nowrap ${
-                    followUpTab === 'entry'
+                  onClick={() => setFollowUpTab('schedule')}
+                  className={`px-4 py-2.5 font-bold text-xs sm:text-sm rounded-t-xl transition inline-flex items-center gap-2 cursor-pointer border-t-2 ${
+                    followUpTab === 'schedule'
                       ? 'bg-white text-purple-700 border-purple-600 shadow-xs'
                       : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
                   }`}
                 >
-                  <Edit3 className="w-4 h-4 text-purple-600" />
-                  <span>ফলো-আপে কি কি হলো ও ওষুধ এন্ট্রি করুন (Log Details)</span>
+                  <CalendarCheck className="w-4 h-4" />
+                  <span>ফলোআপ অ্যাড</span>
+                  {activeApnts.length > 0 && (
+                    <span className="px-1.5 py-0.2 bg-purple-100 text-purple-700 text-[11px] font-bold rounded-full border border-purple-200">
+                      {activeApnts.length}
+                    </span>
+                  )}
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setFollowUpTab('timeline')}
-                  className={`px-4 py-2.5 font-bold text-xs sm:text-sm rounded-t-xl transition flex items-center gap-2 cursor-pointer border-t-2 whitespace-nowrap ${
+                  className={`px-4 py-2.5 font-bold text-xs sm:text-sm rounded-t-xl transition inline-flex items-center gap-2 cursor-pointer border-t-2 ${
                     followUpTab === 'timeline'
                       ? 'bg-white text-purple-700 border-purple-600 shadow-xs'
                       : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
                   }`}
                 >
-                  <FileText className="w-4 h-4 text-blue-600" />
-                  <span>তারিখ অনুযায়ী ডাক্তারের পরামর্শ ও ইতিহাস ({visits.length})</span>
+                  <FileText className="w-4 h-4" />
+                  <span>ফলোআপ ভিউ</span>
+                  <span className="px-1.5 py-0.2 bg-slate-200 text-slate-700 text-[11px] font-bold rounded-full">
+                    {visits.length}
+                  </span>
                 </button>
               </div>
 
               {/* Modal Body */}
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-50">
-                {followUpTab === 'entry' ? (
-                  <form onSubmit={handleSaveFollowUp} className="space-y-5 max-w-4xl mx-auto">
-                    {/* Active Follow-up Appointments notice if any */}
+                {followUpTab === 'schedule' ? (
+                  <div className="space-y-6 max-w-3xl mx-auto">
+                    {/* Active Follow-up Appointments Card if any */}
                     {activeApnts.length > 0 && (
-                      <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-2xl p-3.5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                        <div className="flex items-center gap-2.5">
-                          <Clock className="w-4 h-4 text-purple-600 shrink-0" />
-                          <div className="text-xs text-purple-950">
-                            <span className="font-bold">শিডিউলড ফলো-আপ:</span>{' '}
-                            <span>{activeApnts[0].date} ({activeApnts[0].time})</span> — {activeApnts[0].problem}
-                          </div>
+                      <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-2xl p-4 shadow-xs">
+                        <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-purple-200/60">
+                          <span className="font-bold text-xs text-purple-900 flex items-center gap-1.5">
+                            <Clock className="w-4 h-4 text-purple-600" />
+                            বর্তমান নির্ধারিত ফলো-আপ শিডিউল ({activeApnts.length} টি)
+                          </span>
+                          <span className="px-2 py-0.5 bg-purple-600 text-white font-bold text-[10px] rounded-full uppercase tracking-wider">
+                            Active
+                          </span>
                         </div>
-                        <div className="flex items-center gap-1.5 self-end sm:self-center">
-                          <button
-                            type="button"
-                            onClick={() => handleCompleteFollowUpApnt(activeApnts[0])}
-                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>সম্পন্ন চিহ্নিত করুন</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleCancelFollowUpApnt(activeApnts[0])}
-                            className="px-2.5 py-1 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold rounded-lg transition flex items-center gap-1 cursor-pointer"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                            <span>বাতিল</span>
-                          </button>
+                        <div className="space-y-2">
+                          {activeApnts.map((ap) => (
+                            <div
+                              key={ap.id}
+                              className="bg-white border border-purple-100 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs"
+                            >
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-900 text-sm">{ap.date}</span>
+                                  <span className="font-mono text-xs px-2 py-0.5 bg-slate-100 rounded text-slate-700 font-semibold">
+                                    {ap.time}
+                                  </span>
+                                  <span className="text-xs text-slate-600 flex items-center gap-1">
+                                    <Stethoscope className="w-3 h-3 text-purple-500" />
+                                    {ap.doctorName || 'ডাক্তার'}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-purple-800 font-medium mt-1">
+                                  {ap.problem || 'ফলো-আপ ভিজিট'}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCompleteFollowUpApnt(ap)}
+                                  className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold rounded-lg transition flex items-center gap-1 cursor-pointer"
+                                  title="ফলো-আপ সম্পন্ন হিসেবে চিহ্নিত করুন"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>সম্পন্ন</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCancelFollowUpApnt(ap)}
+                                  className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-xs font-bold rounded-lg transition flex items-center gap-1 cursor-pointer"
+                                  title="শিডিউল বাতিল করুন"
+                                >
+                                  <X className="w-3.5 h-3.5 text-rose-600" />
+                                  <span>বাতিল</span>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
 
-                    {/* Section 1: Follow-up Date & Doctor */}
-                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-                      <div className="font-bold text-xs text-slate-900 flex items-center gap-2 pb-2 border-b border-slate-100">
-                        <Calendar className="w-4 h-4 text-purple-600" />
-                        <span>১. ফলো-আপের তারিখ ও ডাক্তার নির্বাচন (Follow-Up Date & Doctor)</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            কত তারিখে ফলো-আপ হয়েছে (Follow-Up Date) <span className="text-rose-500">*</span>
-                          </label>
-                          <input
-                            type="date"
-                            value={followUpForm.visitDate}
-                            onChange={(e) => setFollowUpForm((prev) => ({ ...prev, visitDate: e.target.value }))}
-                            required
-                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 bg-purple-50/40 focus:bg-white focus:outline-none focus:border-purple-600"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            উপস্থিত ডাক্তার (Attending Doctor)
-                          </label>
-                          <input
-                            type="text"
-                            value={followUpForm.doctorName}
-                            onChange={(e) => setFollowUpForm((prev) => ({ ...prev, doctorName: e.target.value }))}
-                            placeholder="ডাক্তারের নাম..."
-                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-purple-600 font-medium"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Section 2: Complaints & Treatment Performed */}
-                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-                      <div className="font-bold text-xs text-slate-900 flex items-center gap-2 pb-2 border-b border-slate-100">
-                        <Stethoscope className="w-4 h-4 text-purple-600" />
-                        <span>২. কি কি সমস্যা ও কি চিকিৎসা করা হলো (Diagnosis & Treatment Done)</span>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            রোগীর বর্তমান সমস্যা / অবস্থা (C/C)
-                          </label>
-                          <input
-                            type="text"
-                            value={followUpForm.complaints}
-                            onChange={(e) => setFollowUpForm((prev) => ({ ...prev, complaints: e.target.value }))}
-                            placeholder="যেমন: ফলো-আপ চেকআপ, ব্যথা কমেছে..."
-                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-purple-600 font-medium"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            রোগ নির্ণয় (Diagnosis / DX)
-                          </label>
-                          <input
-                            type="text"
-                            value={followUpForm.diagnosis}
-                            onChange={(e) => setFollowUpForm((prev) => ({ ...prev, diagnosis: e.target.value }))}
-                            placeholder="যেমন: Pulpitis (Under RCT), Post Crown..."
-                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-purple-600 font-medium"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Treatment Done */}
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          কি কি চিকিৎসা করা হলো (Treatment Performed / Done) <span className="text-rose-500">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={followUpForm.treatmentDone}
-                          onChange={(e) => setFollowUpForm((prev) => ({ ...prev, treatmentDone: e.target.value }))}
-                          placeholder="যেমন: RCT ২য় সিটিং ও ড্রেসিং পরিবর্তন, ক্রাউন ট্রায়াল সম্পন্ন..."
-                          className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold bg-purple-50/30 focus:bg-white focus:outline-none focus:border-purple-600"
-                        />
-                        {/* Procedure Chips */}
-                        <div className="flex flex-wrap gap-1.5 mt-2">
-                          {quickProcedures.map((proc) => (
-                            <button
-                              key={proc}
-                              type="button"
-                              onClick={() => setFollowUpForm((prev) => ({ ...prev, treatmentDone: proc }))}
-                              className={`text-[11px] px-2.5 py-1 rounded-lg border transition cursor-pointer ${
-                                followUpForm.treatmentDone === proc
-                                  ? 'bg-purple-700 text-white border-purple-700 font-bold shadow-2xs'
-                                  : 'bg-purple-50/60 hover:bg-purple-100 text-purple-900 border-purple-200'
-                              }`}
-                            >
-                              + {proc}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Section 3: Prescribed Medicines (A to Z) */}
-                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-                      <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                        <div className="font-bold text-xs text-slate-900 flex items-center gap-2">
-                          <Pill className="w-4 h-4 text-purple-600" />
-                          <span>৩. কি কি ওষুধ দেওয়া হলো (Prescribed Medicines - A to Z)</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleAddMedicineRow}
-                          className="px-2.5 py-1 bg-purple-100 hover:bg-purple-200 text-purple-800 text-xs font-bold rounded-lg transition flex items-center gap-1 cursor-pointer"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>+ নতুন ওষুধ যোগ করুন</span>
-                        </button>
-                      </div>
-
-                      {/* Quick Dental Medicine Presets */}
-                      <div>
-                        <span className="text-[11px] font-semibold text-slate-500 block mb-1.5">
-                          কুইক ডেন্টাল মেডিসিন চিপস (ক্লিক করে সরাসরি যোগ করুন):
+                    {/* Schedule Creation Form */}
+                    <form onSubmit={handleSaveFollowUp} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+                      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                        <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                          <Sparkles className="w-4 h-4 text-purple-600" />
+                          <span>নতুন ফলো-আপ শিডিউল নির্ধারণ (Follow-up Add)</span>
+                        </h4>
+                        <span className="text-[11px] text-slate-500">
+                          তারিখ ও সময় সিলেক্ট করুন
                         </span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {commonDentalMeds.map((med, idx) => (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => handleAddPresetMedicine(med)}
-                              className="text-[11px] px-2.5 py-1 bg-slate-100 hover:bg-purple-100 hover:text-purple-900 text-slate-800 border border-slate-200 hover:border-purple-300 rounded-lg transition cursor-pointer font-medium"
-                              title={`${med.brand} (${med.dose} - ${med.instruction} - ${med.duration})`}
-                            >
-                              + {med.brand}
-                            </button>
-                          ))}
-                        </div>
                       </div>
 
-                      {/* Dynamic Medicine Rows */}
-                      <div className="space-y-2 mt-2">
-                        {followUpForm.medicines.map((med, index) => (
-                          <div
-                            key={index}
-                            className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex flex-col md:flex-row items-stretch md:items-center gap-2 text-xs"
-                          >
-                            <span className="w-6 h-6 rounded-full bg-purple-200 text-purple-900 font-bold flex items-center justify-center shrink-0 text-[11px]">
-                              {index + 1}
-                            </span>
-
-                            {/* Brand Name */}
-                            <div className="flex-1 min-w-[200px]">
-                              <input
-                                type="text"
-                                value={med.brand}
-                                onChange={(e) => handleUpdateMedicineRow(index, 'brand', e.target.value)}
-                                placeholder="ওষুধের নাম (যেমন: Tab. Napa Extra)..."
-                                className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-purple-600 font-bold text-slate-900"
-                              />
-                            </div>
-
-                            {/* Dose */}
-                            <div className="w-full md:w-32">
-                              <input
-                                type="text"
-                                value={med.dose}
-                                onChange={(e) => handleUpdateMedicineRow(index, 'dose', e.target.value)}
-                                placeholder="ডোজ (১+০+১)"
-                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-purple-600 font-mono text-purple-700 font-bold"
-                              />
-                            </div>
-
-                            {/* Instruction */}
-                            <div className="w-full md:w-44">
-                              <input
-                                type="text"
-                                value={med.instruction}
-                                onChange={(e) => handleUpdateMedicineRow(index, 'instruction', e.target.value)}
-                                placeholder="নির্দেশনা (খাওয়ার পর)"
-                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-purple-600 font-medium text-slate-700"
-                              />
-                            </div>
-
-                            {/* Duration */}
-                            <div className="w-full md:w-28">
-                              <input
-                                type="text"
-                                value={med.duration}
-                                onChange={(e) => handleUpdateMedicineRow(index, 'duration', e.target.value)}
-                                placeholder="মেয়াদ (৫ দিন)"
-                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-purple-600 font-medium text-slate-700"
-                              />
-                            </div>
-
-                            {/* Delete Button */}
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveMedicineRow(index)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition self-end md:self-center cursor-pointer"
-                              title="ওষুধটি মুছুন"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Section 4: Advice & Next Visit Schedule */}
-                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-                      <div className="font-bold text-xs text-slate-900 flex items-center gap-2 pb-2 border-b border-slate-100">
-                        <Heart className="w-4 h-4 text-purple-600" />
-                        <span>৪. ডাক্তারের পরামর্শ ও পরবর্তী সাক্ষাতের তারিখ (Advice & Next Follow-Up)</span>
-                      </div>
-
-                      {/* Advice */}
+                      {/* 1. Date and Quick Date Chips */}
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          ডাক্তারের পরামর্শ ও উপদেশ (Doctor's Advice)
-                        </label>
-                        <textarea
-                          rows={2}
-                          value={followUpForm.advice}
-                          onChange={(e) => setFollowUpForm((prev) => ({ ...prev, advice: e.target.value }))}
-                          placeholder="রোগীর করণীয় পরামর্শ..."
-                          className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-purple-600 font-medium"
-                        />
-                        <div className="flex flex-wrap gap-1.5 mt-1.5">
-                          {quickAdvices.map((adv, idx) => (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => setFollowUpForm((prev) => ({ ...prev, advice: adv }))}
-                              className="text-[10px] px-2 py-0.5 bg-slate-100 hover:bg-purple-100 text-slate-700 border border-slate-200 rounded-md transition cursor-pointer"
-                            >
-                              + {adv}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Next Visit Date & Time */}
-                      <div className="pt-2 border-t border-slate-100">
                         <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                          পরবর্তী ফলো-আপের তারিখ (Next Follow-Up / Revisit Date)
+                          ফলো-আপের তারিখ (Follow-up Date) <span className="text-rose-500">*</span>
                         </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="flex flex-col sm:flex-row gap-2">
                           <input
                             type="date"
-                            value={followUpForm.nextVisitDate}
-                            onChange={(e) => setFollowUpForm((prev) => ({ ...prev, nextVisitDate: e.target.value }))}
-                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 bg-purple-50/40 focus:bg-white focus:outline-none focus:border-purple-600"
-                          />
-                          <input
-                            type="text"
-                            value={followUpForm.nextVisitTime}
-                            onChange={(e) => setFollowUpForm((prev) => ({ ...prev, nextVisitTime: e.target.value }))}
-                            placeholder="সময় (যেমন: 05:00 PM)"
-                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-purple-600 font-medium"
+                            value={followUpForm.date}
+                            onChange={(e) => setFollowUpForm((prev) => ({ ...prev, date: e.target.value }))}
+                            required
+                            className="px-3 py-2 border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 bg-purple-50/40 focus:bg-white focus:outline-none focus:border-purple-600 flex-1"
                           />
                         </div>
-
                         {/* Quick Date Chips */}
                         <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                          <span className="text-[11px] font-semibold text-slate-500 mr-1">কুইক ডেট:</span>
+                          <span className="text-[11px] font-semibold text-slate-500 mr-1">কুইক সিলেক্ট:</span>
                           {[
+                            { label: 'আজ (Today)', days: 0 },
+                            { label: 'কাল (Tomorrow)', days: 1 },
                             { label: '৩ দিন পর', days: 3 },
                             { label: '৭ দিন পর', days: 7 },
-                            { label: '১০ দিন পর', days: 10 },
                             { label: '১৫ দিন পর', days: 15 },
-                            { label: '১ মাস পর', days: 30 },
                           ].map((chip) => (
                             <button
                               key={chip.days}
@@ -1648,20 +1319,151 @@ function PatientManagementContent() {
                               {chip.label}
                             </button>
                           ))}
+                        </div>
+                      </div>
+
+                      {/* 2. Time & Doctor Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {/* Time */}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            সময় / টাইম স্লট (Time Slot)
+                          </label>
+                          <input
+                            type="text"
+                            value={followUpForm.time}
+                            onChange={(e) => setFollowUpForm((prev) => ({ ...prev, time: e.target.value }))}
+                            placeholder="যেমন: 05:00 PM বা বিকেল ০৫:০০"
+                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-purple-600 font-medium"
+                          />
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {quickTimes.map((t) => (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => setFollowUpForm((prev) => ({ ...prev, time: t }))}
+                                className={`text-[10px] px-2 py-0.5 rounded border transition cursor-pointer ${
+                                  followUpForm.time === t
+                                    ? 'bg-purple-600 text-white border-purple-600 font-bold'
+                                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-purple-50 hover:text-purple-700'
+                                }`}
+                              >
+                                {t}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Doctor */}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            ডাক্তার (Attending Doctor)
+                          </label>
+                          <input
+                            type="text"
+                            value={followUpForm.doctorName}
+                            onChange={(e) => setFollowUpForm((prev) => ({ ...prev, doctorName: e.target.value }))}
+                            placeholder="ডাক্তারের নাম..."
+                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-purple-600 font-medium"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1">
+                            ডিফল্ট: {clinicSettings?.doctor1?.name || 'Dr. Ifrad'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* 3. Reason / Dental Procedure */}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          ফলো-আপের উদ্দেশ্য / চিকিৎসার ধরন (Procedure / Purpose)
+                        </label>
+                        <input
+                          type="text"
+                          value={followUpForm.procedure}
+                          onChange={(e) => setFollowUpForm((prev) => ({ ...prev, procedure: e.target.value }))}
+                          placeholder="যেমন: RCT ২য় সিটিং, ক্রাউন ট্রায়াল, সেলাই কাটা, রুটিন চেকআপ..."
+                          className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-purple-600 font-medium"
+                        />
+                      </div>
+
+                      {/* 4. Notes */}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          বিশেষ নির্দেশনা / নোট (Clinical Instructions / Notes)
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={followUpForm.notes}
+                          onChange={(e) => setFollowUpForm((prev) => ({ ...prev, notes: e.target.value }))}
+                          placeholder="রোগীর কোনো বিশেষ প্রস্তুতি বা পরামর্শ থাকলে লিখুন..."
+                          className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-purple-600 font-medium"
+                        />
+                      </div>
+
+                      {/* Form Submit Footer */}
+                      <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => setFollowUpForm((prev) => ({ ...prev, nextVisitDate: '' }))}
-                            className="px-2.5 py-1 text-[11px] font-medium bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg transition cursor-pointer"
+                            onClick={() => setFollowUpTab('timeline')}
+                            className="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 rounded-xl font-bold text-xs transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
                           >
-                            প্রয়োজন নেই
+                            <FileText className="w-4 h-4 text-purple-600" />
+                            <span>ফলোআপ ভিউ দেখুন ({visits.length})</span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setFollowUpPatient(null)}
+                            className="px-4 py-2 border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-xs transition cursor-pointer"
+                          >
+                            বাতিল
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isSavingFollowUp}
+                            className="px-5 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl font-bold text-xs transition shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            <CalendarCheck className="w-4 h-4" />
+                            <span>{isSavingFollowUp ? 'সংরক্ষণ হচ্ছে...' : 'ফলোআপ সংরক্ষণ করুন'}</span>
                           </button>
                         </div>
                       </div>
+                    </form>
+                  </div>
+                ) : (
+                  /* Timeline Tab: Date-wise Doctor Suggestions */
+                  <div className="space-y-4 max-w-4xl mx-auto">
+                    <div className="flex flex-wrap items-center justify-between gap-2 bg-purple-50/80 border border-purple-200 rounded-xl p-3 text-xs">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-purple-600" />
+                        <span className="font-bold text-purple-900">
+                          তারিখ অনুযায়ী পূর্ববর্তী চিকিৎসা ও ডাক্তারের পরামর্শ ({visits.length} টি)
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setFollowUpTab('schedule')}
+                        className="px-3 py-1.5 bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs rounded-lg transition inline-flex items-center gap-1 shadow-xs cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>নতুন ফলোআপ অ্যাড</span>
+                      </button>
                     </div>
 
-                    {/* Footer Submit Buttons */}
-                    <div className="pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 sticky bottom-0 bg-slate-50 py-2">
-                      <div className="flex items-center gap-2">
+                    {visits.length === 0 ? (
+                      <div className="text-center bg-white border border-slate-200 rounded-2xl p-10 shadow-xs">
+                        <div className="w-14 h-14 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-center mx-auto mb-3">
+                          <FileText className="w-7 h-7 text-purple-600" />
+                        </div>
+                        <h4 className="font-bold text-slate-800 text-base mb-1">
+                          কোনো প্রেসক্রিপশন বা ডাক্তারের পরামর্শ পাওয়া যায়নি
+                        </h4>
+                        <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
+                          এই রোগীর জন্য এখনো কোনো প্রেসক্রিপশন বা ক্লিনিক্যাল ডাটা অ্যান্ট্রি করা হয়নি।
+                        </p>
                         {!isReceptionistOrCashier && (
                           <Link
                             href={`/prescription?regNo=${followUpPatient.regNo}&name=${encodeURIComponent(
@@ -1669,70 +1471,22 @@ function PatientManagementContent() {
                             )}&age=${encodeURIComponent(followUpPatient.age || '')}&sex=${
                               followUpPatient.sex || 'M'
                             }&mobile=${encodeURIComponent(followUpPatient.mobile || '')}`}
-                            className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-xs transition flex items-center gap-1.5 shadow-2xs"
+                            className="inline-flex items-center gap-1.5 px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs rounded-xl shadow-xs transition"
                           >
-                            <FileText className="w-4 h-4 text-emerald-600" />
-                            <span>প্রেসক্রিপশন এডিটরে যান</span>
+                            <Plus className="w-4 h-4" />
+                            <span>নতুন প্রেসক্রিপশন তৈরি করুন</span>
                           </Link>
                         )}
                       </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setFollowUpPatient(null)}
-                          className="px-4 py-2 border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-xs transition cursor-pointer"
-                        >
-                          বন্ধ করুন
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={isSavingFollowUp}
-                          className="px-6 py-2.5 bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-800 hover:to-indigo-800 text-white rounded-xl font-bold text-xs transition shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                        >
-                          <CalendarCheck className="w-4 h-4" />
-                          <span>{isSavingFollowUp ? 'সংরক্ষণ হচ্ছে...' : '💾 ফলো-আপ ও চিকিৎসার বিবরণ সংরক্ষণ করুন'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </form>
-                ) : (
-                  /* Timeline Tab: Date-wise Doctor Suggestions */
-                  <div className="space-y-4 max-w-4xl mx-auto">
-                    {visits.length === 0 ? (
-                      <div className="text-center bg-white border border-slate-200 rounded-2xl p-10 shadow-xs">
-                        <div className="w-14 h-14 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-center mx-auto mb-3">
-                          <FileText className="w-7 h-7 text-purple-600" />
-                        </div>
-                        <h4 className="font-bold text-slate-800 text-base mb-1">
-                          কোনো পূর্ববর্তী প্রেসক্রিপশন বা ডাক্তারের পরামর্শ পাওয়া যায়নি
-                        </h4>
-                        <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
-                          উপরে &quot;ফলো-আপে কি কি হলো ও ওষুধ এন্ট্রি করুন&quot; ট্যাবে গিয়ে নতুন বিবরণ যুক্ত করুন।
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => setFollowUpTab('entry')}
-                          className="inline-flex items-center gap-1.5 px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
-                        >
-                          <Plus className="w-4 h-4" />
-                          <span>নতুন ফলো-আপ বিবরণ যুক্ত করুন</span>
-                        </button>
-                      </div>
                     ) : (
                       <div className="space-y-4">
-                        <div className="flex items-center justify-between bg-purple-50/80 border border-purple-200 rounded-xl px-4 py-2.5 text-xs text-purple-950 font-bold">
+                        <div className="flex items-center justify-between bg-purple-50/70 border border-purple-200/70 rounded-xl px-4 py-2.5 text-xs text-purple-900 font-bold">
                           <span>
-                            তারিখ অনুযায়ী রোগীর সকল চিকিৎসা, ডাক্তারের পরামর্শ ও ওষুধের তালিকা (মোট {visits.length} টি ভিজিট)
+                            তারিখ অনুযায়ী পূর্ববর্তী সকল চিকিৎসা, প্রেসক্রিপশন ও ডাক্তারের পরামর্শ তালিকা (মোট: {visits.length} টি)
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => setFollowUpTab('entry')}
-                            className="px-2.5 py-1 bg-purple-700 hover:bg-purple-800 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>+ নতুন ফলো-আপ যোগ করুন</span>
-                          </button>
+                          <span className="text-[11px] text-purple-700 font-normal">
+                            সর্বশেষ ভিজিট: {visits[0]?.date || 'N/A'}
+                          </span>
                         </div>
 
                         <ol className="relative border-l-2 border-purple-300 ml-3 space-y-6">
@@ -1769,7 +1523,7 @@ function PatientManagementContent() {
                                       {rx.nextVisitDate && (
                                         <span className="text-xs text-amber-800 font-bold bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 flex items-center gap-1">
                                           <CalendarCheck className="w-3.5 h-3.5 text-amber-600" />
-                                          পরবর্তী ফলো-আপ: {rx.nextVisitDate}
+                                          ফলো-আপ: {rx.nextVisitDate}
                                         </span>
                                       )}
                                       <button
@@ -1813,7 +1567,7 @@ function PatientManagementContent() {
                                         {meds.map((m, mi) => (
                                           <div
                                             key={mi}
-                                            className="bg-white p-2.5 rounded-lg border border-purple-200/60 shadow-2xs text-xs"
+                                            className="bg-white p-2 rounded-lg border border-purple-200/60 shadow-2xs text-xs"
                                           >
                                             <div className="font-bold text-slate-900">{m.brand}</div>
                                             <div className="text-[11px] text-slate-600 mt-0.5 flex flex-wrap gap-x-2">
