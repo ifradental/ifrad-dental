@@ -530,6 +530,18 @@ export function PrescriptionEditor({
     if (cleanName.includes('filling') || cleanName.includes('composite') || cleanName.includes('restoration')) {
       return 1500;
     }
+    if (cleanName.includes('pulpitis') || cleanName.includes('necrosis') || cleanName.includes('periapical') || cleanName.includes('abscess')) {
+      return 3500;
+    }
+    if (cleanName.includes('caries') || cleanName.includes('cavity') || cleanName.includes('attrition') || cleanName.includes('abrasion')) {
+      return 1500;
+    }
+    if (cleanName.includes('periodontitis') || cleanName.includes('gingivitis') || cleanName.includes('calculus') || cleanName.includes('stain')) {
+      return 1200;
+    }
+    if (cleanName.includes('stump') || cleanName.includes('mobility') || cleanName.includes('root piece')) {
+      return 1000;
+    }
     if (cleanName.includes('extraction') || cleanName.includes('removal')) {
       if (cleanName.includes('surgical') || cleanName.includes('impacted') || cleanName.includes('odontectomy') || cleanName.includes('wisdom')) {
         return 6000;
@@ -550,6 +562,7 @@ export function PrescriptionEditor({
     if (cleanName.includes('pulpotomy')) return 2000;
     if (cleanName.includes('x-ray') || cleanName.includes('iopa')) return 300;
     if (cleanName.includes('opg')) return 1000;
+    if (cleanName.includes('diagnosis') || cleanName.includes('dx')) return 500;
 
     return existingPrice || 0;
   };
@@ -577,55 +590,146 @@ export function PrescriptionEditor({
     };
   };
 
-  // Real-time synchronization helper from Prescription Plan / Items to Contract Entry
-  const syncPrescriptionPlanToContract = (
-    plans: string[] = treatmentPlanList,
-    quads: ToothQuadrant[] = treatmentPlanQuadrants,
-    forceRebuild: boolean = false
-  ) => {
-    const activePlans = plans.map((p) => (p || '').trim());
-    const hasAnyPlan = activePlans.some((p) => p.length > 0);
+  // Real-time synchronization helper from Clinical Entries (Plan, DX, Done, IX, etc.) to Contract Entry
+  const syncClinicalToContract = (options?: {
+    overridePlans?: string[];
+    overridePlanQuads?: ToothQuadrant[];
+    overrideDx?: string[];
+    overrideDxQuads?: ToothQuadrant[];
+    overrideDone?: string[];
+    overrideDoneQuads?: ToothQuadrant[];
+    overrideIx?: string[];
+    overrideIxQuads?: ToothQuadrant[];
+    overrideOe?: string[];
+    overrideOeQuads?: ToothQuadrant[];
+    overrideCc?: string[];
+    overrideCcQuads?: ToothQuadrant[];
+    forceRebuild?: boolean;
+  }) => {
+    const plans = options?.overridePlans ?? treatmentPlanList;
+    const planQuads = options?.overridePlanQuads ?? treatmentPlanQuadrants;
+    const dx = options?.overrideDx ?? dxList;
+    const dxQuads = options?.overrideDxQuads ?? dxQuadrants;
+    const done = options?.overrideDone ?? treatmentDoneList;
+    const doneQuads = options?.overrideDoneQuads ?? treatmentDoneQuadrants;
+    const ix = options?.overrideIx ?? ixList;
+    const ixQuads = options?.overrideIxQuads ?? ixQuadrants;
+    const oe = options?.overrideOe ?? oeList;
+    const oeQuads = options?.overrideOeQuads ?? oeQuadrants;
+    const cc = options?.overrideCc ?? ccList;
+    const ccQuads = options?.overrideCcQuads ?? ccQuadrants;
+    const forceRebuild = options?.forceRebuild ?? false;
+
+    // Helper to check if a quadrant has any teeth selected
+    const hasTeeth = (q?: ToothQuadrant) => (q ? countQuadrantTeeth(q) > 0 : false);
+
+    interface ClinicalEntryItem {
+      particulars: string;
+      quadrant: ToothQuadrant;
+    }
+
+    const clinicalItems: ClinicalEntryItem[] = [];
+
+    const addOrMergeItem = (itemText: string, quad: ToothQuadrant | undefined, defaultTitle: string) => {
+      const trimmed = (itemText || '').trim();
+      const q = quad ? { ...quad } : defaultQuadrant();
+      const hasQTeeth = hasTeeth(q);
+
+      if (!trimmed && !hasQTeeth) return;
+
+      const title = trimmed || defaultTitle;
+      const cleanTitleLower = title.toLowerCase();
+
+      const existing = clinicalItems.find((it) => it.particulars.trim().toLowerCase() === cleanTitleLower);
+      if (existing) {
+        const mergeStr = (s1: string, s2: string) => {
+          const t1 = (s1 || '').split(/[\s,+/]+/).map((s) => s.trim()).filter(Boolean);
+          const t2 = (s2 || '').split(/[\s,+/]+/).map((s) => s.trim()).filter(Boolean);
+          const combined = Array.from(new Set([...t1, ...t2])).sort();
+          return combined.join(', ');
+        };
+        existing.quadrant = {
+          ur: mergeStr(existing.quadrant.ur, q.ur),
+          ul: mergeStr(existing.quadrant.ul, q.ul),
+          lr: mergeStr(existing.quadrant.lr, q.lr),
+          ll: mergeStr(existing.quadrant.ll, q.ll),
+        };
+      } else {
+        clinicalItems.push({
+          particulars: title,
+          quadrant: q,
+        });
+      }
+    };
+
+    // 1. Treatment Plans
+    plans.forEach((p, idx) => addOrMergeItem(p, planQuads[idx], 'Treatment Plan'));
+
+    // 2. DX / Diagnosis
+    dx.forEach((d, idx) => addOrMergeItem(d, dxQuads[idx], 'DX / Diagnosis'));
+
+    // 3. Treatment Done
+    done.forEach((d, idx) => addOrMergeItem(d, doneQuads[idx], 'Treatment Done'));
+
+    // 4. Investigations (IX)
+    ix.forEach((x, idx) => addOrMergeItem(x, ixQuads[idx], 'Investigation / X-Ray'));
+
+    // 5. O/E and C/C (only if teeth are selected)
+    oe.forEach((o, idx) => {
+      if (hasTeeth(oeQuads[idx])) {
+        addOrMergeItem(o, oeQuads[idx], 'O/E Examination');
+      }
+    });
+    cc.forEach((c, idx) => {
+      if (hasTeeth(ccQuads[idx])) {
+        addOrMergeItem(c, ccQuads[idx], 'Chief Complaint');
+      }
+    });
+
+    const hasAnyClinical = clinicalItems.length > 0;
 
     setContractRows((prevRows) => {
-      if (!hasAnyPlan && !forceRebuild) {
+      if (!hasAnyClinical && !forceRebuild) {
         return prevRows;
       }
 
       const updatedRows: { particulars: string; quadrant: ToothQuadrant; price: number; unitPrice?: number }[] = [];
 
-      activePlans.forEach((planText, idx) => {
-        if (!planText) return;
-        const planQuad = quads[idx] ? { ...quads[idx] } : defaultQuadrant();
-        const existingRow = prevRows.find((r) => r.particulars.trim().toLowerCase() === planText.toLowerCase()) || prevRows[idx];
+      clinicalItems.forEach((cItem, idx) => {
+        const existingRow = prevRows.find((r) => r.particulars.trim().toLowerCase() === cItem.particulars.trim().toLowerCase()) || prevRows[idx];
+        const isSameProcedure = existingRow && existingRow.particulars.trim().toLowerCase() === cItem.particulars.trim().toLowerCase();
 
-        const isSameProcedure = existingRow && existingRow.particulars.trim().toLowerCase() === planText.toLowerCase();
         const unitPrice = lookupProcedureUnitPrice(
-          planText,
+          cItem.particulars,
           isSameProcedure && existingRow.unitPrice && existingRow.unitPrice > 0 ? existingRow.unitPrice : undefined,
           isSameProcedure && existingRow.price && existingRow.price > 0 ? existingRow.price : undefined
         );
-        const teethCount = countQuadrantTeeth(planQuad);
+
+        const teethCount = countQuadrantTeeth(cItem.quadrant);
         const multiplier = teethCount > 0 ? teethCount : 1;
         const price = (unitPrice || 0) * multiplier;
 
         updatedRows.push({
-          particulars: planText,
-          quadrant: planQuad,
+          particulars: cItem.particulars,
+          quadrant: cItem.quadrant,
           unitPrice,
           price,
         });
       });
 
-      // If user had existing custom rows that weren't in plans, keep them
-      if (updatedRows.length < prevRows.length) {
-        for (let i = updatedRows.length; i < prevRows.length; i++) {
-          if (prevRows[i]?.particulars?.trim() && !activePlans.includes(prevRows[i].particulars.trim())) {
-            updatedRows.push({ ...prevRows[i] });
+      // Preserve custom rows manually entered by doctor that weren't from clinical items
+      prevRows.forEach((r) => {
+        if (r?.particulars?.trim()) {
+          const isFromClinical = clinicalItems.some(
+            (c) => c.particulars.trim().toLowerCase() === r.particulars.trim().toLowerCase()
+          );
+          if (!isFromClinical) {
+            updatedRows.push({ ...r });
           }
         }
-      }
+      });
 
-      // Ensure at least 3 rows in Contract Entry
+      // Maintain minimum 3 rows in Contract Entry
       while (updatedRows.length < 3) {
         updatedRows.push({ particulars: '', quadrant: defaultQuadrant(), price: 0, unitPrice: 0 });
       }
@@ -634,13 +738,51 @@ export function PrescriptionEditor({
     });
   };
 
-  // Real-time automatic effect to sync Treatment Plan to Contract Entry whenever plans or quadrants change
-  useEffect(() => {
-    const hasActivePlans = treatmentPlanList.some((p) => (p || '').trim().length > 0);
-    if (hasActivePlans) {
-      syncPrescriptionPlanToContract(treatmentPlanList, treatmentPlanQuadrants);
+  // Compatibility alias for existing callers
+  const syncPrescriptionPlanToContract = (
+    plans: string[] = treatmentPlanList,
+    quads: ToothQuadrant[] = treatmentPlanQuadrants,
+    forceRebuild: boolean = false
+  ) => {
+    if (plans === treatmentDoneList) {
+      syncClinicalToContract({ overrideDone: plans, overrideDoneQuads: quads, forceRebuild });
+    } else if (plans === dxList) {
+      syncClinicalToContract({ overrideDx: plans, overrideDxQuads: quads, forceRebuild });
+    } else {
+      syncClinicalToContract({ overridePlans: plans, overridePlanQuads: quads, forceRebuild });
     }
-  }, [treatmentPlanList, treatmentPlanQuadrants, allTemplates]);
+  };
+
+  // Real-time automatic effect to sync Clinical Entries to Contract Entry whenever items or quadrants change
+  useEffect(() => {
+    const hasActiveClinical =
+      treatmentPlanList.some((p) => (p || '').trim().length > 0) ||
+      treatmentPlanQuadrants.some((q) => countQuadrantTeeth(q) > 0) ||
+      dxList.some((d) => (d || '').trim().length > 0) ||
+      dxQuadrants.some((q) => countQuadrantTeeth(q) > 0) ||
+      treatmentDoneList.some((d) => (d || '').trim().length > 0) ||
+      treatmentDoneQuadrants.some((q) => countQuadrantTeeth(q) > 0) ||
+      ixList.some((x) => (x || '').trim().length > 0) ||
+      ixQuadrants.some((q) => countQuadrantTeeth(q) > 0) ||
+      oeQuadrants.some((q) => countQuadrantTeeth(q) > 0) ||
+      ccQuadrants.some((q) => countQuadrantTeeth(q) > 0);
+
+    if (hasActiveClinical) {
+      syncClinicalToContract();
+    }
+  }, [
+    treatmentPlanList,
+    treatmentPlanQuadrants,
+    dxList,
+    dxQuadrants,
+    treatmentDoneList,
+    treatmentDoneQuadrants,
+    ixList,
+    ixQuadrants,
+    oeQuadrants,
+    ccQuadrants,
+    allTemplates,
+  ]);
   const [printMode, setPrintMode] = useState<'full' | 'without_header'>('full');
   const [clinicSettings, setClinicSettings] = useState<any>(null);
   const [printHeaderMarginCm, setPrintHeaderMarginCm] = useState<number>(5.6);
@@ -2232,13 +2374,44 @@ export function PrescriptionEditor({
     templateFilterType: string,
     placeholder: string
   ) => {
+    const isAutoContractSection = ['plan', 'done', 'dx', 'ix'].includes(sectionKey);
+
+    const triggerClinicalSync = (
+      sKey: string,
+      updatedList: string[],
+      updatedQuads: ToothQuadrant[],
+      forceRebuild: boolean = false
+    ) => {
+      const syncOptions: Parameters<typeof syncClinicalToContract>[0] = { forceRebuild };
+      if (sKey === 'plan') {
+        syncOptions.overridePlans = updatedList;
+        syncOptions.overridePlanQuads = updatedQuads;
+      } else if (sKey === 'dx') {
+        syncOptions.overrideDx = updatedList;
+        syncOptions.overrideDxQuads = updatedQuads;
+      } else if (sKey === 'done') {
+        syncOptions.overrideDone = updatedList;
+        syncOptions.overrideDoneQuads = updatedQuads;
+      } else if (sKey === 'ix') {
+        syncOptions.overrideIx = updatedList;
+        syncOptions.overrideIxQuads = updatedQuads;
+      } else if (sKey === 'oe') {
+        syncOptions.overrideOe = updatedList;
+        syncOptions.overrideOeQuads = updatedQuads;
+      } else if (sKey === 'cc') {
+        syncOptions.overrideCc = updatedList;
+        syncOptions.overrideCcQuads = updatedQuads;
+      }
+      syncClinicalToContract(syncOptions);
+    };
+
     return (
       <div className="relative mb-3">
         <div className="bg-white rounded border border-blue-400 shadow-sm relative">
           <div className="bg-[#0088cc] text-white px-3 py-1 font-bold text-xs flex justify-between items-center select-none rounded-t">
             <div className="flex items-center space-x-1.5">
               <span>{title}</span>
-              {sectionKey === 'plan' && (
+              {isAutoContractSection && (
                 <span className="text-[9px] bg-emerald-400/90 text-emerald-950 font-bold px-1.5 py-0.2 rounded-full flex items-center gap-0.5">
                   <Sparkles className="w-2.5 h-2.5" /> Auto Contract
                 </span>
@@ -2251,9 +2424,7 @@ export function PrescriptionEditor({
                 const updatedQuads = [...quadrants, defaultQuadrant()];
                 setList(updatedList);
                 setQuadrants(updatedQuads);
-                if (sectionKey === 'plan') {
-                  syncPrescriptionPlanToContract(updatedList, updatedQuads);
-                }
+                triggerClinicalSync(sectionKey, updatedList, updatedQuads);
               }}
               className="hover:bg-white/20 p-0.5 rounded text-white font-bold"
               title="Add Row"
@@ -2315,9 +2486,7 @@ export function PrescriptionEditor({
                       }
                       setList(updatedList);
                       setQuadrants(updatedQuads);
-                      if (sectionKey === 'plan') {
-                        syncPrescriptionPlanToContract(updatedList, updatedQuads);
-                      }
+                      triggerClinicalSync(sectionKey, updatedList, updatedQuads, true);
                     }}
                     className="w-6 border border-slate-300 bg-slate-100 hover:bg-red-50 hover:border-red-300 text-slate-500 hover:text-red-600 rounded flex items-center justify-center font-bold text-xs flex-shrink-0 transition"
                     title="Clear / Delete"
@@ -2345,9 +2514,7 @@ export function PrescriptionEditor({
                           index: i,
                           query: val,
                         });
-                        if (sectionKey === 'plan') {
-                          syncPrescriptionPlanToContract(updated, quadrants);
-                        }
+                        triggerClinicalSync(sectionKey, updated, quadrants);
                       }}
                       onBlur={() => {
                         setTimeout(() => {
@@ -2376,9 +2543,7 @@ export function PrescriptionEditor({
                               updated[i] = tmpl.name;
                               setList(updated);
                               setActiveClinicalSuggest(null);
-                              if (sectionKey === 'plan') {
-                                syncPrescriptionPlanToContract(updated, quadrants);
-                              }
+                              triggerClinicalSync(sectionKey, updated, quadrants);
                             }}
                             className="p-2 hover:bg-sky-100 cursor-pointer text-xs flex justify-between items-center text-slate-800 transition"
                           >
@@ -2403,18 +2568,14 @@ export function PrescriptionEditor({
                           const q = [...quadrants];
                           q[i] = { ...quad, ur: e.target.value };
                           setQuadrants(q);
-                          if (sectionKey === 'plan') {
-                            syncPrescriptionPlanToContract(list, q);
-                          }
+                          triggerClinicalSync(sectionKey, list, q);
                         }}
                         onClick={() =>
                           openToothPicker(sectionKey, title, i, 'ur', quad, (newQ) => {
                             const updated = [...quadrants];
                             updated[i] = newQ;
                             setQuadrants(updated);
-                            if (sectionKey === 'plan') {
-                              syncPrescriptionPlanToContract(list, updated);
-                            }
+                            triggerClinicalSync(sectionKey, list, updated);
                           })
                         }
                         title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (UR - Upper Right)"
@@ -2428,18 +2589,14 @@ export function PrescriptionEditor({
                           const q = [...quadrants];
                           q[i] = { ...quad, ul: e.target.value };
                           setQuadrants(q);
-                          if (sectionKey === 'plan') {
-                            syncPrescriptionPlanToContract(list, q);
-                          }
+                          triggerClinicalSync(sectionKey, list, q);
                         }}
                         onClick={() =>
                           openToothPicker(sectionKey, title, i, 'ul', quad, (newQ) => {
                             const updated = [...quadrants];
                             updated[i] = newQ;
                             setQuadrants(updated);
-                            if (sectionKey === 'plan') {
-                              syncPrescriptionPlanToContract(list, updated);
-                            }
+                            triggerClinicalSync(sectionKey, list, updated);
                           })
                         }
                         title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (UL - Upper Left)"
@@ -2455,18 +2612,14 @@ export function PrescriptionEditor({
                           const q = [...quadrants];
                           q[i] = { ...quad, lr: e.target.value };
                           setQuadrants(q);
-                          if (sectionKey === 'plan') {
-                            syncPrescriptionPlanToContract(list, q);
-                          }
+                          triggerClinicalSync(sectionKey, list, q);
                         }}
                         onClick={() =>
                           openToothPicker(sectionKey, title, i, 'lr', quad, (newQ) => {
                             const updated = [...quadrants];
                             updated[i] = newQ;
                             setQuadrants(updated);
-                            if (sectionKey === 'plan') {
-                              syncPrescriptionPlanToContract(list, updated);
-                            }
+                            triggerClinicalSync(sectionKey, list, updated);
                           })
                         }
                         title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (LR - Lower Right)"
@@ -2480,18 +2633,14 @@ export function PrescriptionEditor({
                           const q = [...quadrants];
                           q[i] = { ...quad, ll: e.target.value };
                           setQuadrants(q);
-                          if (sectionKey === 'plan') {
-                            syncPrescriptionPlanToContract(list, q);
-                          }
+                          triggerClinicalSync(sectionKey, list, q);
                         }}
                         onClick={() =>
                           openToothPicker(sectionKey, title, i, 'll', quad, (newQ) => {
                             const updated = [...quadrants];
                             updated[i] = newQ;
                             setQuadrants(updated);
-                            if (sectionKey === 'plan') {
-                              syncPrescriptionPlanToContract(list, updated);
-                            }
+                            triggerClinicalSync(sectionKey, list, updated);
                           })
                         }
                         title="ক্লিক করে দাঁতের ছবি ও ১-৮ নম্বর নির্বাচন করুন (LL - Lower Left)"
@@ -2539,9 +2688,7 @@ export function PrescriptionEditor({
                         setQuadrants(updatedQuads);
                       }
                       setOpenDropdownSection(null);
-                      if (sectionKey === 'plan') {
-                        syncPrescriptionPlanToContract(updatedList, updatedQuads);
-                      }
+                      triggerClinicalSync(sectionKey, updatedList, updatedQuads);
                     }}
                     className="py-1 px-1.5 hover:bg-white rounded cursor-pointer text-xs flex justify-between items-center"
                   >
@@ -3929,21 +4076,21 @@ export function PrescriptionEditor({
               <div className="flex items-center space-x-1.5">
                 <button
                   type="button"
-                  onClick={() => syncPrescriptionPlanToContract(treatmentPlanList, treatmentPlanQuadrants, true)}
+                  onClick={() => syncClinicalToContract({ forceRebuild: true })}
                   className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[10px] font-bold flex items-center space-x-1 shadow-xs transition cursor-pointer"
-                  title="Treatment Plan থেকে সব এন্ট্রি ও দাঁতের কোয়ারড্র্যান্ট সিঙ্ক করুন"
+                  title="Treatment Plan, DX, Done ও IX থেকে সব এন্ট্রি ও দাঁতের কোয়ারড্র্যান্ট সিঙ্ক করুন"
                 >
                   <Sparkles className="w-3 h-3 text-sky-200" />
-                  <span>প্ল্যান হতে সিঙ্ক</span>
+                  <span>ক্লিনিক্যাল হতে সিঙ্ক</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     const doneItems = treatmentDoneList.filter(Boolean);
                     if (doneItems.length > 0) {
-                      syncPrescriptionPlanToContract(treatmentDoneList, treatmentDoneQuadrants, true);
+                      syncClinicalToContract({ overrideDone: treatmentDoneList, overrideDoneQuads: treatmentDoneQuadrants, forceRebuild: true });
                     } else {
-                      syncPrescriptionPlanToContract(dxList, dxQuadrants, true);
+                      syncClinicalToContract({ overrideDx: dxList, overrideDxQuads: dxQuadrants, forceRebuild: true });
                     }
                   }}
                   className="px-2 py-0.5 bg-white hover:bg-sky-50 text-blue-900 border border-blue-300 rounded text-[10px] font-bold flex items-center space-x-1 shadow-xs transition cursor-pointer"
@@ -4237,7 +4384,9 @@ export function PrescriptionEditor({
                               onChange={(e) => {
                                 const newPrice = Number(e.target.value);
                                 const updated = [...contractRows];
-                                updated[idx] = { ...row, price: newPrice, unitPrice: newPrice };
+                                const teeth = countQuadrantTeeth(row.quadrant);
+                                const uPrice = teeth > 1 ? Math.round(newPrice / teeth) : newPrice;
+                                updated[idx] = { ...row, price: newPrice, unitPrice: uPrice };
                                 setContractRows(updated);
                               }}
                               onBlur={() => {
