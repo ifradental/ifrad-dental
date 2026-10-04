@@ -490,6 +490,58 @@ export function PrescriptionEditor({
     });
   };
 
+  // Smart clinical text parsing for embedded price or quantity
+  const parseClinicalTextAndCost = (text: string) => {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return { cleanParticulars: '', rawText: '', parsedPrice: undefined, parsedQuantity: undefined };
+
+    let working = trimmed;
+    let parsedPrice: number | undefined = undefined;
+    let parsedQuantity: number | undefined = undefined;
+
+    // 1. Detect and extract quantity: "x 2", "x2", "* 2", "2 teeth", "2 tooth", "২টি দাঁত", "2টি", "2 pcs"
+    const qtyMatch = working.match(/(?:(?:^|\s)(?:x|\*)\s*(\d{1,2}))|(?:(\d{1,2})\s*(?:teeth|tooth|দাঁত|টি|pcs))/i);
+    if (qtyMatch) {
+      const q = parseInt(qtyMatch[1] || qtyMatch[2], 10);
+      if (!isNaN(q) && q > 0 && q <= 32) {
+        parsedQuantity = q;
+        working = working.replace(qtyMatch[0], ' ').trim();
+      }
+    }
+
+    // 2. Detect and extract price:
+    // e.g. "3500 tk", "3500tk", "৳3500", "৳ 3500", "tk 3500", "@ 3500", "= 3500", ": 3500", "- 3500", "(3500)", "3500/-"
+    const pricePatterns: { regex: RegExp; extractIndex: number }[] = [
+      { regex: /(?:৳|tk|taka|টাকা)\s*([0-9]{3,7})/i, extractIndex: 1 },
+      { regex: /([0-9]{3,7})\s*(?:৳|tk|taka|টাকা|\/\-)/i, extractIndex: 1 },
+      { regex: /(?:@|=|:)\s*([0-9]{3,7})/i, extractIndex: 1 },
+      { regex: /\(([0-9]{3,7})\)/, extractIndex: 1 },
+      { regex: /(?:^|\s)-\s*([0-9]{3,7})(?:\s|$)/, extractIndex: 1 },
+      { regex: /(?:^|\s)([1-9][0-9]{2,6})(?:\s*$)/, extractIndex: 1 },
+    ];
+
+    for (const { regex, extractIndex } of pricePatterns) {
+      const match = working.match(regex);
+      if (match && match[extractIndex]) {
+        const p = parseInt(match[extractIndex], 10);
+        if (!isNaN(p) && p >= 100 && p <= 500000 && p !== 2024 && p !== 2025 && p !== 2026 && p !== 2027) {
+          parsedPrice = p;
+          working = working.replace(match[0], ' ').trim();
+          break;
+        }
+      }
+    }
+
+    working = working.replace(/[-:,+=/@]+$/, '').trim();
+
+    return {
+      cleanParticulars: working || trimmed,
+      rawText: trimmed,
+      parsedPrice,
+      parsedQuantity,
+    };
+  };
+
   // Smart lookup for procedure unit price (single tooth cost)
   const lookupProcedureUnitPrice = (
     procedureName: string,
@@ -500,11 +552,19 @@ export function PrescriptionEditor({
     const cleanName = (procedureName || '').trim().toLowerCase();
     if (!cleanName) return existingPrice || 0;
 
+    // Check if price is explicitly written in procedure text (e.g. "RCT 3500")
+    const parsed = parseClinicalTextAndCost(procedureName);
+    if (parsed.parsedPrice && parsed.parsedPrice > 0) {
+      return parsed.parsedPrice;
+    }
+
+    const cleanLookupName = parsed.cleanParticulars.trim().toLowerCase();
+
     // 1. Exact match in allTemplates
     const exact = allTemplates.find(
       (t) =>
         (t.type === 'cost' || t.type === 'cost_auto' || t.type === 'treatment' || t.type === 'treatment_auto') &&
-        t.name.trim().toLowerCase() === cleanName &&
+        (t.name.trim().toLowerCase() === cleanName || t.name.trim().toLowerCase() === cleanLookupName) &&
         t.price !== undefined &&
         t.price > 0
     );
@@ -516,53 +576,53 @@ export function PrescriptionEditor({
         t.type === 'cost' || t.type === 'cost_auto' || t.type === 'treatment' || t.type === 'treatment_auto';
       if (!isMatchable || !t.price || t.price <= 0) return false;
       const tName = t.name.trim().toLowerCase();
-      return cleanName.includes(tName) || tName.includes(cleanName);
+      return cleanLookupName.includes(tName) || tName.includes(cleanLookupName);
     });
     if (partial?.price) return partial.price;
 
     // 3. Clinical keyword intelligent fallback prices
-    if (cleanName.includes('rct') || cleanName.includes('root canal')) {
-      return cleanName.includes('molar') ? 4500 : 3500;
+    if (cleanLookupName.includes('rct') || cleanLookupName.includes('root canal')) {
+      return cleanLookupName.includes('molar') ? 4500 : 3500;
     }
-    if (cleanName.includes('scaling') || cleanName.includes('polishing') || cleanName.includes('ultrasonic')) {
+    if (cleanLookupName.includes('scaling') || cleanLookupName.includes('polishing') || cleanLookupName.includes('ultrasonic')) {
       return 1200;
     }
-    if (cleanName.includes('filling') || cleanName.includes('composite') || cleanName.includes('restoration')) {
+    if (cleanLookupName.includes('filling') || cleanLookupName.includes('composite') || cleanLookupName.includes('restoration')) {
       return 1500;
     }
-    if (cleanName.includes('pulpitis') || cleanName.includes('necrosis') || cleanName.includes('periapical') || cleanName.includes('abscess')) {
+    if (cleanLookupName.includes('pulpitis') || cleanLookupName.includes('necrosis') || cleanLookupName.includes('periapical') || cleanLookupName.includes('abscess')) {
       return 3500;
     }
-    if (cleanName.includes('caries') || cleanName.includes('cavity') || cleanName.includes('attrition') || cleanName.includes('abrasion')) {
+    if (cleanLookupName.includes('caries') || cleanLookupName.includes('cavity') || cleanLookupName.includes('attrition') || cleanLookupName.includes('abrasion')) {
       return 1500;
     }
-    if (cleanName.includes('periodontitis') || cleanName.includes('gingivitis') || cleanName.includes('calculus') || cleanName.includes('stain')) {
+    if (cleanLookupName.includes('periodontitis') || cleanLookupName.includes('gingivitis') || cleanLookupName.includes('calculus') || cleanLookupName.includes('stain')) {
       return 1200;
     }
-    if (cleanName.includes('stump') || cleanName.includes('mobility') || cleanName.includes('root piece')) {
+    if (cleanLookupName.includes('stump') || cleanLookupName.includes('mobility') || cleanLookupName.includes('root piece')) {
       return 1000;
     }
-    if (cleanName.includes('extraction') || cleanName.includes('removal')) {
-      if (cleanName.includes('surgical') || cleanName.includes('impacted') || cleanName.includes('odontectomy') || cleanName.includes('wisdom')) {
+    if (cleanLookupName.includes('extraction') || cleanLookupName.includes('removal')) {
+      if (cleanLookupName.includes('surgical') || cleanLookupName.includes('impacted') || cleanLookupName.includes('odontectomy') || cleanLookupName.includes('wisdom')) {
         return 6000;
       }
-      if (cleanName.includes('molar')) return 1500;
+      if (cleanLookupName.includes('molar')) return 1500;
       return 1000;
     }
-    if (cleanName.includes('crown') || cleanName.includes('cap')) {
-      if (cleanName.includes('zirconia')) return 9500;
-      if (cleanName.includes('emax') || cleanName.includes('ceramic')) return 14000;
+    if (cleanLookupName.includes('crown') || cleanLookupName.includes('cap')) {
+      if (cleanLookupName.includes('zirconia')) return 9500;
+      if (cleanLookupName.includes('emax') || cleanLookupName.includes('ceramic')) return 14000;
       return 5500;
     }
-    if (cleanName.includes('implant')) return 40000;
-    if (cleanName.includes('denture')) return 30000;
-    if (cleanName.includes('bleaching') || cleanName.includes('whitening')) return 12000;
-    if (cleanName.includes('splinting')) return 2500;
-    if (cleanName.includes('apicoectomy')) return 7000;
-    if (cleanName.includes('pulpotomy')) return 2000;
-    if (cleanName.includes('x-ray') || cleanName.includes('iopa')) return 300;
-    if (cleanName.includes('opg')) return 1000;
-    if (cleanName.includes('diagnosis') || cleanName.includes('dx')) return 500;
+    if (cleanLookupName.includes('implant')) return 40000;
+    if (cleanLookupName.includes('denture')) return 30000;
+    if (cleanLookupName.includes('bleaching') || cleanLookupName.includes('whitening')) return 12000;
+    if (cleanLookupName.includes('splinting')) return 2500;
+    if (cleanLookupName.includes('apicoectomy')) return 7000;
+    if (cleanLookupName.includes('pulpotomy')) return 2000;
+    if (cleanLookupName.includes('x-ray') || cleanLookupName.includes('iopa')) return 300;
+    if (cleanLookupName.includes('opg')) return 1000;
+    if (cleanLookupName.includes('diagnosis') || cleanLookupName.includes('dx')) return 500;
 
     return existingPrice || 0;
   };
@@ -604,6 +664,7 @@ export function PrescriptionEditor({
     overrideOeQuads?: ToothQuadrant[];
     overrideCc?: string[];
     overrideCcQuads?: ToothQuadrant[];
+    overrideUnitPrices?: Record<string, number>;
     forceRebuild?: boolean;
   }) => {
     const plans = options?.overridePlans ?? treatmentPlanList;
@@ -625,22 +686,31 @@ export function PrescriptionEditor({
 
     interface ClinicalEntryItem {
       particulars: string;
+      cleanParticulars: string;
       quadrant: ToothQuadrant;
+      explicitPrice?: number;
+      explicitQuantity?: number;
     }
 
     const clinicalItems: ClinicalEntryItem[] = [];
 
-    const addOrMergeItem = (itemText: string, quad: ToothQuadrant | undefined, defaultTitle: string) => {
+    const addOrMergeItem = (
+      itemText: string,
+      quad: ToothQuadrant | undefined,
+      defaultTitle: string,
+      explicitUnitPrice?: number
+    ) => {
       const trimmed = (itemText || '').trim();
       const q = quad ? { ...quad } : defaultQuadrant();
       const hasQTeeth = hasTeeth(q);
 
       if (!trimmed && !hasQTeeth) return;
 
-      const title = trimmed || defaultTitle;
+      const parsed = parseClinicalTextAndCost(trimmed);
+      const title = parsed.cleanParticulars || trimmed || defaultTitle;
       const cleanTitleLower = title.toLowerCase();
 
-      const existing = clinicalItems.find((it) => it.particulars.trim().toLowerCase() === cleanTitleLower);
+      const existing = clinicalItems.find((it) => it.cleanParticulars.trim().toLowerCase() === cleanTitleLower);
       if (existing) {
         const mergeStr = (s1: string, s2: string) => {
           const t1 = (s1 || '').split(/[\s,+/]+/).map((s) => s.trim()).filter(Boolean);
@@ -654,35 +724,55 @@ export function PrescriptionEditor({
           lr: mergeStr(existing.quadrant.lr, q.lr),
           ll: mergeStr(existing.quadrant.ll, q.ll),
         };
+        if (parsed.parsedPrice) existing.explicitPrice = parsed.parsedPrice;
+        if (parsed.parsedQuantity) existing.explicitQuantity = parsed.parsedQuantity;
+        if (explicitUnitPrice) existing.explicitPrice = explicitUnitPrice;
       } else {
         clinicalItems.push({
           particulars: title,
+          cleanParticulars: title,
           quadrant: q,
+          explicitPrice: explicitUnitPrice || parsed.parsedPrice,
+          explicitQuantity: parsed.parsedQuantity,
         });
       }
     };
 
     // 1. Treatment Plans
-    plans.forEach((p, idx) => addOrMergeItem(p, planQuads[idx], 'Treatment Plan'));
+    plans.forEach((p, idx) => {
+      const explicit = options?.overrideUnitPrices?.[p.trim().toLowerCase()];
+      addOrMergeItem(p, planQuads[idx], 'Treatment Plan', explicit);
+    });
 
     // 2. DX / Diagnosis
-    dx.forEach((d, idx) => addOrMergeItem(d, dxQuads[idx], 'DX / Diagnosis'));
+    dx.forEach((d, idx) => {
+      const explicit = options?.overrideUnitPrices?.[d.trim().toLowerCase()];
+      addOrMergeItem(d, dxQuads[idx], 'DX / Diagnosis', explicit);
+    });
 
     // 3. Treatment Done
-    done.forEach((d, idx) => addOrMergeItem(d, doneQuads[idx], 'Treatment Done'));
+    done.forEach((d, idx) => {
+      const explicit = options?.overrideUnitPrices?.[d.trim().toLowerCase()];
+      addOrMergeItem(d, doneQuads[idx], 'Treatment Done', explicit);
+    });
 
     // 4. Investigations (IX)
-    ix.forEach((x, idx) => addOrMergeItem(x, ixQuads[idx], 'Investigation / X-Ray'));
+    ix.forEach((x, idx) => {
+      const explicit = options?.overrideUnitPrices?.[x.trim().toLowerCase()];
+      addOrMergeItem(x, ixQuads[idx], 'Investigation / X-Ray', explicit);
+    });
 
     // 5. O/E and C/C (only if teeth are selected)
     oe.forEach((o, idx) => {
       if (hasTeeth(oeQuads[idx])) {
-        addOrMergeItem(o, oeQuads[idx], 'O/E Examination');
+        const explicit = options?.overrideUnitPrices?.[o.trim().toLowerCase()];
+        addOrMergeItem(o, oeQuads[idx], 'O/E Examination', explicit);
       }
     });
     cc.forEach((c, idx) => {
       if (hasTeeth(ccQuads[idx])) {
-        addOrMergeItem(c, ccQuads[idx], 'Chief Complaint');
+        const explicit = options?.overrideUnitPrices?.[c.trim().toLowerCase()];
+        addOrMergeItem(c, ccQuads[idx], 'Chief Complaint', explicit);
       }
     });
 
@@ -695,22 +785,30 @@ export function PrescriptionEditor({
 
       const updatedRows: { particulars: string; quadrant: ToothQuadrant; price: number; unitPrice?: number }[] = [];
 
-      clinicalItems.forEach((cItem, idx) => {
-        const existingRow = prevRows.find((r) => r.particulars.trim().toLowerCase() === cItem.particulars.trim().toLowerCase()) || prevRows[idx];
-        const isSameProcedure = existingRow && existingRow.particulars.trim().toLowerCase() === cItem.particulars.trim().toLowerCase();
-
-        const unitPrice = lookupProcedureUnitPrice(
-          cItem.particulars,
-          isSameProcedure && existingRow.unitPrice && existingRow.unitPrice > 0 ? existingRow.unitPrice : undefined,
-          isSameProcedure && existingRow.price && existingRow.price > 0 ? existingRow.price : undefined
+      clinicalItems.forEach((cItem) => {
+        const existingRow = prevRows.find(
+          (r) => r.particulars.trim().toLowerCase() === cItem.cleanParticulars.trim().toLowerCase()
         );
+        const isSameProcedure = !!existingRow && existingRow.particulars.trim().toLowerCase() === cItem.cleanParticulars.trim().toLowerCase();
+
+        let unitPrice: number;
+        if (cItem.explicitPrice && cItem.explicitPrice > 0) {
+          unitPrice = cItem.explicitPrice;
+        } else if (isSameProcedure && existingRow.unitPrice && existingRow.unitPrice > 0) {
+          unitPrice = existingRow.unitPrice;
+        } else if (isSameProcedure && existingRow.price && existingRow.price > 0 && countQuadrantTeeth(cItem.quadrant) <= 1) {
+          unitPrice = existingRow.price;
+        } else {
+          unitPrice = lookupProcedureUnitPrice(cItem.cleanParticulars);
+        }
 
         const teethCount = countQuadrantTeeth(cItem.quadrant);
-        const multiplier = teethCount > 0 ? teethCount : 1;
+        const multiplier =
+          teethCount > 0 ? teethCount : cItem.explicitQuantity && cItem.explicitQuantity > 0 ? cItem.explicitQuantity : 1;
         const price = (unitPrice || 0) * multiplier;
 
         updatedRows.push({
-          particulars: cItem.particulars,
+          particulars: cItem.cleanParticulars,
           quadrant: cItem.quadrant,
           unitPrice,
           price,
@@ -721,7 +819,7 @@ export function PrescriptionEditor({
       prevRows.forEach((r) => {
         if (r?.particulars?.trim()) {
           const isFromClinical = clinicalItems.some(
-            (c) => c.particulars.trim().toLowerCase() === r.particulars.trim().toLowerCase()
+            (c) => c.cleanParticulars.trim().toLowerCase() === r.particulars.trim().toLowerCase()
           );
           if (!isFromClinical) {
             updatedRows.push({ ...r });
@@ -2380,9 +2478,10 @@ export function PrescriptionEditor({
       sKey: string,
       updatedList: string[],
       updatedQuads: ToothQuadrant[],
-      forceRebuild: boolean = false
+      forceRebuild: boolean = false,
+      overrideUnitPrices?: Record<string, number>
     ) => {
-      const syncOptions: Parameters<typeof syncClinicalToContract>[0] = { forceRebuild };
+      const syncOptions: Parameters<typeof syncClinicalToContract>[0] = { forceRebuild, overrideUnitPrices };
       if (sKey === 'plan') {
         syncOptions.overridePlans = updatedList;
         syncOptions.overridePlanQuads = updatedQuads;
@@ -2448,26 +2547,27 @@ export function PrescriptionEditor({
                         sectionKey === 'cc'
                           ? t.type === 'cc_auto' || t.type === 'cc'
                           : sectionKey === 'dx'
-                          ? t.type === 'dx_auto' || t.type === 'treatment' || t.type === 'dx'
+                          ? t.type === 'dx_auto' || t.type === 'dx' || t.type === 'treatment' || t.type === 'cost' || t.type === 'cost_auto'
                           : sectionKey === 'ix'
-                          ? t.type === 'ix_auto' || t.type === 'investigation' || t.type === 'ix'
+                          ? t.type === 'ix_auto' || t.type === 'investigation' || t.type === 'ix' || t.type === 'cost'
                           : sectionKey === 'plan'
-                          ? t.type === 'plan_auto' || t.type === 'treatment'
+                          ? t.type === 'plan_auto' || t.type === 'treatment' || t.type === 'cost' || t.type === 'cost_auto'
                           : sectionKey === 'done'
-                          ? t.type === 'treatment' || t.type === 'plan_auto'
+                          ? t.type === 'treatment' || t.type === 'plan_auto' || t.type === 'cost' || t.type === 'cost_auto'
                           : sectionKey === 'note'
                           ? t.type === 'note_auto' || t.type === 'advice'
-                          : t.type === templateFilterType || t.type === `${templateFilterType}_auto`;
+                          : t.type === templateFilterType || t.type === `${templateFilterType}_auto` || t.type === 'cost';
 
                       if (!matchesCategory) return false;
                       if (!currentQuery) return true;
                       return (
                         t.name.toLowerCase().includes(currentQuery) ||
-                        (t.content && t.content.toLowerCase().includes(currentQuery))
+                        (t.content && t.content.toLowerCase().includes(currentQuery)) ||
+                        (t.price !== undefined && t.price.toString().includes(currentQuery))
                       );
                     })
                     .sort((a, b) => (b.count || 0) - (a.count || 0))
-                    .slice(0, 8)
+                    .slice(0, 15)
                 : [];
 
               return (
@@ -2527,34 +2627,51 @@ export function PrescriptionEditor({
                       className="w-full h-full p-1.5 border border-slate-300 rounded text-xs bg-white focus:outline-none focus:border-blue-500 font-sans resize-y leading-tight"
                     />
 
-                    {/* Live Autocomplete Suggestion Dropdown */}
+                    {/* Live Autocomplete Suggestion Dropdown with Price Display */}
                     {isFocused && matchedTemplates.length > 0 && (
-                      <div className="absolute left-0 top-full mt-1 w-full min-w-[280px] bg-white border-2 border-blue-500 rounded-md shadow-2xl z-[999] max-h-56 overflow-y-auto divide-y divide-slate-100">
+                      <div className="absolute left-0 top-full mt-1 w-full min-w-[320px] sm:min-w-[360px] bg-white border-2 border-blue-500 rounded-md shadow-2xl z-[999] max-h-60 overflow-y-auto divide-y divide-slate-100">
                         <div className="bg-blue-600 text-white px-2.5 py-1 text-[11px] font-bold flex justify-between items-center sticky top-0 z-10">
-                          <span>💡 {title} Autosave Suggestions ({matchedTemplates.length})</span>
-                          <span className="text-blue-100 text-[9px]">Click to insert</span>
+                          <span>💡 {title} Auto Suggestions ({matchedTemplates.length})</span>
+                          <span className="text-blue-100 text-[9px]">Click to auto-sync to Contract</span>
                         </div>
-                        {matchedTemplates.map((tmpl) => (
-                          <div
-                            key={tmpl.id}
-                            onMouseDown={(e) => {
-                              e.preventDefault();
-                              const updated = [...list];
-                              updated[i] = tmpl.name;
-                              setList(updated);
-                              setActiveClinicalSuggest(null);
-                              triggerClinicalSync(sectionKey, updated, quadrants);
-                            }}
-                            className="p-2 hover:bg-sky-100 cursor-pointer text-xs flex justify-between items-center text-slate-800 transition"
-                          >
-                            <span className="font-semibold text-blue-950">{tmpl.name}</span>
-                            {tmpl.count && tmpl.count > 0 ? (
-                              <span className="text-[10px] bg-sky-50 text-blue-700 px-1.5 py-0.5 rounded font-mono font-bold shrink-0 ml-2">
-                                {tmpl.count}x
-                              </span>
-                            ) : null}
-                          </div>
-                        ))}
+                        {matchedTemplates.map((tmpl) => {
+                          const tmplPrice = tmpl.price && tmpl.price > 0 ? tmpl.price : lookupProcedureUnitPrice(tmpl.name);
+                          return (
+                            <div
+                              key={tmpl.id}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                const updated = [...list];
+                                updated[i] = tmpl.name;
+                                setList(updated);
+                                setActiveClinicalSuggest(null);
+                                triggerClinicalSync(sectionKey, updated, quadrants, false, {
+                                  [tmpl.name.trim().toLowerCase()]: tmplPrice,
+                                });
+                              }}
+                              className="p-2 hover:bg-sky-100 cursor-pointer text-xs flex justify-between items-center text-slate-800 transition"
+                            >
+                              <div className="flex flex-col flex-1 pr-2">
+                                <span className="font-semibold text-blue-950">{tmpl.name}</span>
+                                {tmpl.content && tmpl.content !== tmpl.name && (
+                                  <span className="text-[10px] text-slate-500 line-clamp-1">{tmpl.content}</span>
+                                )}
+                              </div>
+                              <div className="flex items-center space-x-1.5 shrink-0">
+                                {tmplPrice > 0 && (
+                                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-mono">
+                                    ৳ {tmplPrice.toLocaleString()}
+                                  </span>
+                                )}
+                                {tmpl.count && tmpl.count > 0 ? (
+                                  <span className="text-[10px] bg-sky-50 text-blue-700 px-1.5 py-0.5 rounded font-mono font-bold">
+                                    {tmpl.count}x
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -2660,42 +2777,54 @@ export function PrescriptionEditor({
               {allTemplates
                 .filter((t) => {
                   if (sectionKey === 'cc') return t.type === 'cc_auto' || t.type === 'cc';
-                  if (sectionKey === 'dx') return t.type === 'dx_auto' || t.type === 'treatment' || t.type === 'dx';
-                  if (sectionKey === 'ix') return t.type === 'ix_auto' || t.type === 'investigation' || t.type === 'ix';
-                  if (sectionKey === 'plan') return t.type === 'plan_auto' || t.type === 'treatment';
-                  if (sectionKey === 'done') return t.type === 'treatment' || t.type === 'plan_auto';
+                  if (sectionKey === 'dx') return t.type === 'dx_auto' || t.type === 'dx' || t.type === 'treatment' || t.type === 'cost' || t.type === 'cost_auto';
+                  if (sectionKey === 'ix') return t.type === 'ix_auto' || t.type === 'investigation' || t.type === 'ix' || t.type === 'cost';
+                  if (sectionKey === 'plan') return t.type === 'plan_auto' || t.type === 'treatment' || t.type === 'cost' || t.type === 'cost_auto';
+                  if (sectionKey === 'done') return t.type === 'treatment' || t.type === 'plan_auto' || t.type === 'cost' || t.type === 'cost_auto';
                   if (sectionKey === 'note') return t.type === 'note_auto' || t.type === 'advice';
-                  return t.type === templateFilterType || t.type === `${templateFilterType}_auto`;
+                  return t.type === templateFilterType || t.type === `${templateFilterType}_auto` || t.type === 'cost';
                 })
                 .sort((a, b) => (b.count || 0) - (a.count || 0))
                 .slice(0, 15)
-                .map((t, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => {
-                      const emptyIdx = list.findIndex((x) => !x.trim());
-                      let updatedList: string[];
-                      let updatedQuads: ToothQuadrant[];
-                      if (emptyIdx !== -1) {
-                        updatedList = [...list];
-                        updatedList[emptyIdx] = t.name;
-                        updatedQuads = [...quadrants];
-                        setList(updatedList);
-                      } else {
-                        updatedList = [...list.filter(Boolean), t.name];
-                        updatedQuads = [...quadrants, defaultQuadrant()];
-                        setList(updatedList);
-                        setQuadrants(updatedQuads);
-                      }
-                      setOpenDropdownSection(null);
-                      triggerClinicalSync(sectionKey, updatedList, updatedQuads);
-                    }}
-                    className="py-1 px-1.5 hover:bg-white rounded cursor-pointer text-xs flex justify-between items-center"
-                  >
-                    <span className="font-medium text-slate-800">{t.name}</span>
-                    <span className="text-blue-600 font-bold text-[10px] ml-2 shrink-0">+ Insert</span>
-                  </div>
-                ))}
+                .map((t, idx) => {
+                  const tPrice = t.price && t.price > 0 ? t.price : lookupProcedureUnitPrice(t.name);
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => {
+                        const emptyIdx = list.findIndex((x) => !x.trim());
+                        let updatedList: string[];
+                        let updatedQuads: ToothQuadrant[];
+                        if (emptyIdx !== -1) {
+                          updatedList = [...list];
+                          updatedList[emptyIdx] = t.name;
+                          updatedQuads = [...quadrants];
+                          setList(updatedList);
+                        } else {
+                          updatedList = [...list.filter(Boolean), t.name];
+                          updatedQuads = [...quadrants, defaultQuadrant()];
+                          setList(updatedList);
+                          setQuadrants(updatedQuads);
+                        }
+                        setOpenDropdownSection(null);
+                        triggerClinicalSync(sectionKey, updatedList, updatedQuads, false, {
+                          [t.name.trim().toLowerCase()]: tPrice,
+                        });
+                      }}
+                      className="py-1 px-1.5 hover:bg-white rounded cursor-pointer text-xs flex justify-between items-center"
+                    >
+                      <span className="font-medium text-slate-800">{t.name}</span>
+                      <div className="flex items-center space-x-1.5 shrink-0 ml-2">
+                        {tPrice > 0 && (
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded font-mono">
+                            ৳ {tPrice.toLocaleString()}
+                          </span>
+                        )}
+                        <span className="text-blue-600 font-bold text-[10px]">+ Insert</span>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           )}
         </div>
