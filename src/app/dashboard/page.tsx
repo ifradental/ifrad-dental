@@ -2584,6 +2584,9 @@ function MarketingOfficerDashboard({
   clinicSettings,
   todayStr,
 }: any) {
+  const userRole = (user?.role || '').toLowerCase();
+  const isAdmin = userRole === 'admin' || userRole === 'super_admin' || userRole === 'superadmin';
+
   const [tasks, setTasks] = useState<MarketingTask[]>([]);
   const [reports, setReports] = useState<MarketingReport[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
