@@ -19,7 +19,10 @@ import {
   Stethoscope,
   ChevronLeft,
   ChevronRight,
-  Users
+  Users,
+  ClipboardList,
+  UserCog,
+  Shield
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/db';
@@ -37,13 +40,15 @@ const allNavItems: NavItem[] = [
   { name: 'Prescription', href: '/prescription', icon: <FileText className="w-4 h-4" />, allowedRoles: ['admin', 'doctor'] },
   { name: 'Drug DB', href: '/drugs', icon: <Pill className="w-4 h-4" />, allowedRoles: ['admin'] },
   { name: 'Template', href: '/templates', icon: <LayoutTemplate className="w-4 h-4" />, allowedRoles: ['admin'] },
-  { name: 'Appointment', href: '/appointments', icon: <Calendar className="w-4 h-4" /> },
+  { name: 'Appointment', href: '/appointments', icon: <Calendar className="w-4 h-4" />, allowedRoles: ['admin', 'doctor', 'receptionist', 'cashier'] },
   { name: 'Payment & Accounts', href: '/payments', icon: <CreditCard className="w-4 h-4" />, allowedRoles: ['admin', 'receptionist', 'cashier'] },
   { name: 'Employee Management', href: '/employees', icon: <Users className="w-4 h-4" />, allowedRoles: ['admin'] },
   { name: 'Material & Stock', href: '/materials', icon: <Package className="w-4 h-4" />, allowedRoles: ['admin', 'staff', 'receptionist', 'cashier'] },
   { name: 'Header Edit', href: '/header-edit', icon: <Heading1 className="w-4 h-4" />, allowedRoles: ['admin'] },
   { name: 'Settings', href: '/settings', icon: <Settings className="w-4 h-4" />, allowedRoles: ['admin', 'doctor'] },
   { name: 'SMS Gateway', href: '/sms', icon: <MessageSquare className="w-4 h-4" />, allowedRoles: ['admin'] },
+  { name: 'Marketing Officer', href: '/marketing-officer', icon: <UserCog className="w-4 h-4" />, allowedRoles: ['admin'] },
+  { name: 'All Task', href: '/all-tasks', icon: <ClipboardList className="w-4 h-4" /> },
 ];
 
 export function Sidebar() {
@@ -52,7 +57,7 @@ export function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<string>('');
   const [clinicLogo, setClinicLogo] = useState<string>('');
-  const [clinicName, setClinicName] = useState<string>('Dentist PRO 7.0');
+  const [clinicName, setClinicName] = useState<string>('ইফরা ডেন্টাল সেন্টার');
 
   const loadBranding = async () => {
     try {
@@ -87,21 +92,28 @@ export function Sidebar() {
 
   const userRole = (user?.role || 'doctor').toLowerCase();
   const isReceptionistOrCashier = userRole.includes('receptionist') || userRole.includes('cashier');
+  const isMarketingOrEmployee = userRole.includes('marketing') || userRole.includes('employee') || userRole === 'staff';
 
   const filteredNavItems = useMemo(() => {
     return allNavItems.filter((item) => {
-      // Doctor user sees Dashboard, Appointment, Prescription, and Settings
+      // Doctor user sees Dashboard, Appointment, Prescription, Settings, and All Task
       if (userRole === 'doctor') {
         return (
           item.href === '/dashboard' ||
           item.href === '/appointments' ||
           item.href === '/prescription' ||
-          item.href === '/settings'
+          item.href === '/settings' ||
+          item.href === '/all-tasks'
         );
       }
 
       if (userRole === 'admin' || userRole === 'super_admin' || userRole === 'superadmin') {
         return true;
+      }
+
+      // Marketing / Employee role sees Dashboard and All Task only
+      if (isMarketingOrEmployee) {
+        return item.href === '/dashboard' || item.href === '/all-tasks';
       }
 
       if (!item.allowedRoles) return true;
@@ -110,7 +122,7 @@ export function Sidebar() {
       }
       return item.allowedRoles.includes(userRole);
     });
-  }, [userRole, isReceptionistOrCashier]);
+  }, [userRole, isReceptionistOrCashier, isMarketingOrEmployee]);
 
   if (!isAuthenticated) return null;
 
@@ -118,22 +130,23 @@ export function Sidebar() {
     const r = (role || '').toLowerCase();
     if (r === 'admin' || r === 'super_admin') return 'অ্যাডমিনিস্ট্রেটর';
     if (r === 'doctor') return 'ডাক্তার';
-    if (r.includes('receptionist') || r.includes('cashier')) return 'রিসেপশনিস্ট ও ক্যাশিয়ার';
+    if (r.includes('receptionist') || r.includes('cashier')) return 'রিসেপশনিস্ট';
     if (r === 'staff') return 'ক্লিনিক স্টাফ';
+    if (r.includes('marketing')) return 'মার্কেটিং অফিসার';
     return role;
   };
 
   return (
     <aside
-      className={`no-print select-none bg-gradient-to-b from-slate-900 via-blue-950 to-slate-950 text-white flex flex-col justify-between transition-all duration-300 z-50 border-r border-sky-900/40 shadow-xl h-screen sticky top-0 ${
+      className={`no-print select-none bg-slate-950 text-slate-200 flex flex-col justify-between transition-all duration-300 z-50 border-r border-slate-800/80 shadow-2xl h-screen sticky top-0 ${
         isCollapsed ? 'w-16' : 'w-64'
       }`}
     >
       {/* 1. TOP BRANDING & LOGO */}
       <div>
-        <div className="p-3.5 border-b border-sky-800/30 flex items-center justify-between">
+        <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between">
           <div className="flex items-center space-x-2.5 overflow-hidden">
-            <div className="w-9 h-9 bg-white rounded-xl flex items-center justify-center p-1 shadow-md flex-shrink-0 border border-sky-300/40 overflow-hidden">
+            <div className="w-9 h-9 bg-slate-900 rounded-xl flex items-center justify-center p-1 shadow-sm flex-shrink-0 border border-slate-800 overflow-hidden">
               {clinicLogo ? (
                 <img
                   src={clinicLogo}
@@ -141,33 +154,28 @@ export function Sidebar() {
                   className="w-full h-full object-contain rounded-lg"
                 />
               ) : (
-                <div className="w-full h-full bg-gradient-to-tr from-sky-400 to-blue-600 rounded-lg flex items-center justify-center text-lg">
+                <div className="w-full h-full bg-gradient-to-tr from-blue-600 to-cyan-500 rounded-lg flex items-center justify-center text-base">
                   🦷
                 </div>
               )}
             </div>
             {!isCollapsed && (
               <div className="flex flex-col min-w-0">
-                <div className="flex items-center space-x-1.5">
-                  <span
-                    className="font-extrabold text-xs tracking-tight text-white font-sans truncate max-w-[130px]"
-                    title={clinicName}
-                  >
-                    {clinicName}
-                  </span>
-                  <span className="bg-yellow-400 text-slate-950 text-[8px] font-black px-1 py-0.2 rounded shrink-0">
-                    PRO
-                  </span>
-                </div>
-                <span className="text-[10px] text-sky-200/70 truncate">Dental Management</span>
+                <span
+                  className="font-bold text-xs tracking-tight text-white font-sans truncate max-w-[145px]"
+                  title={clinicName}
+                >
+                  {clinicName}
+                </span>
+                <span className="text-[10px] text-slate-400 truncate">ডেন্টাল ম্যানেজমেন্ট</span>
               </div>
             )}
           </div>
 
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-1 text-sky-300 hover:text-white hover:bg-white/10 rounded transition cursor-pointer"
-            title={isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition cursor-pointer"
+            title={isCollapsed ? 'সাইডবার প্রসারিত করুন' : 'সাইডবার সংকুচিত করুন'}
           >
             {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
           </button>
@@ -175,32 +183,31 @@ export function Sidebar() {
 
         {/* 2. LOGGED IN USER PROFILE BANNER */}
         {!isCollapsed && user && (
-          <div className="p-2.5 mx-2 my-2 bg-blue-900/30 rounded-lg border border-sky-500/20 flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-full bg-blue-700 border border-sky-400 flex items-center justify-center text-yellow-300 flex-shrink-0 overflow-hidden">
+          <div className="p-2.5 mx-2.5 my-2 bg-slate-900/90 rounded-xl border border-slate-800/80 flex items-center space-x-2.5 shadow-xs">
+            <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-cyan-400 flex-shrink-0 overflow-hidden">
               {user.avatar ? (
                 <img src={user.avatar} alt="User Avatar" className="w-full h-full object-cover" />
               ) : userRole === 'doctor' ? (
                 <Stethoscope className="w-4 h-4" />
               ) : userRole === 'admin' ? (
-                <span className="text-sm">👑</span>
+                <Shield className="w-4 h-4 text-amber-400" />
               ) : (
-                <UserCheck className="w-4 h-4 text-sky-300" />
+                <UserCheck className="w-4 h-4 text-cyan-400" />
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-xs font-bold text-white truncate">{user.name}</div>
-              <div className="text-[10px] text-sky-300 flex items-center space-x-1">
-                <span className="px-1.5 py-0.2 bg-blue-800/80 rounded text-[9px] font-semibold text-yellow-300">
+              <div className="text-xs font-semibold text-white truncate">{user.name}</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">
+                <span className="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] font-medium text-cyan-300 border border-slate-700/60">
                   {getRoleLabel(userRole)}
                 </span>
-                <span className="text-[9px] text-slate-300">| Web Edition</span>
               </div>
             </div>
           </div>
         )}
 
         {/* 3. VERTICAL NAVIGATION MENU */}
-        <nav className="p-2 space-y-1 overflow-y-auto max-h-[calc(100vh-280px)]">
+        <nav className="p-2 space-y-0.5 overflow-y-auto max-h-[calc(100vh-270px)]">
           {filteredNavItems.map((item) => {
             const isSettingsMatch =
               (item.href === '/settings' || item.href === '/setup') &&
@@ -216,13 +223,13 @@ export function Sidebar() {
                 key={item.name}
                 href={item.href}
                 title={isCollapsed ? item.name : undefined}
-                className={`flex items-center space-x-3 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-all ${
+                className={`flex items-center space-x-3 px-3 py-2 rounded-xl text-xs font-medium tracking-wide transition-all ${
                   isActive
-                    ? 'bg-sky-600 text-white shadow-md font-bold shadow-sky-900/40 border-l-4 border-yellow-400'
-                    : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold shadow-md shadow-blue-900/20'
+                    : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100'
                 } ${isCollapsed ? 'justify-center px-2' : ''}`}
               >
-                <span className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-sky-300'}`}>
+                <span className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`}>
                   {item.icon}
                 </span>
                 {!isCollapsed && <span className="truncate">{item.name}</span>}
@@ -233,47 +240,36 @@ export function Sidebar() {
       </div>
 
       {/* 4. BOTTOM SYSTEM STATUS & LOGOUT */}
-      <div className="p-2.5 border-t border-sky-800/30 bg-slate-950/60 space-y-2">
-        {/* System Online Badge */}
+      <div className="p-2.5 border-t border-slate-800/80 bg-slate-950 space-y-2">
+        {/* System Online Status */}
         {!isCollapsed ? (
-          <div className="p-2 bg-slate-900/80 rounded-lg border border-white/10 text-xs">
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex items-center space-x-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span className="font-bold text-[11px] text-white">MongoDB Connected</span>
-              </div>
-              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                LIVE
-              </span>
+          <div className="px-2.5 py-1.5 bg-slate-900/80 rounded-xl border border-slate-800/60 flex items-center justify-between text-[11px]">
+            <div className="flex items-center space-x-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span className="text-slate-300 font-medium">সিস্টেম অনলাইন</span>
             </div>
-
-            <div className="text-[10px] text-slate-400 flex justify-between font-mono">
-              <span>Web Edition</span>
-              <span>{currentTime}</span>
-            </div>
+            <span className="font-mono text-slate-400 text-[10px]">{currentTime}</span>
           </div>
         ) : (
-          <div className="flex justify-center">
-            <div className="p-2 bg-slate-900 rounded-lg border border-white/10 text-emerald-400" title="MongoDB Connected (Online)">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 block animate-pulse"></span>
-            </div>
+          <div className="flex justify-center py-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 block animate-pulse" title="সিস্টেম অনলাইন"></span>
           </div>
         )}
 
         {/* Logout Button */}
         <button
           onClick={() => {
-            if (confirm('Are you sure you want to log out?')) {
+            if (confirm('আপনি কি নিশ্চিত যে আপনি লগআউট করতে চান?')) {
               logout();
             }
           }}
-          className={`w-full py-1.5 px-3 bg-red-700/80 hover:bg-red-600 text-white rounded-lg text-xs font-bold transition flex items-center justify-center space-x-2 cursor-pointer ${
+          className={`w-full py-2 px-3 bg-slate-900 hover:bg-rose-950/40 text-slate-300 hover:text-rose-300 border border-slate-800 hover:border-rose-900/40 rounded-xl text-xs font-semibold transition flex items-center justify-center space-x-2 cursor-pointer ${
             isCollapsed ? 'p-2' : ''
           }`}
-          title="Log Out"
+          title="লগআউট"
         >
           <LogOut className="w-3.5 h-3.5" />
-          {!isCollapsed && <span>Logout</span>}
+          {!isCollapsed && <span>লগআউট</span>}
         </button>
       </div>
     </aside>

@@ -32,12 +32,14 @@ import {
   Sparkles,
   Award,
   Activity,
-  History
+  History,
+  Target
 } from 'lucide-react';
 import { db, type Employee, type EmployeeRole } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
 import { logActivity } from '@/lib/activityLogger';
+import { DentalLoadingSpinner } from '@/components/DentalLoadingSpinner';
 
 export default function EmployeesPage() {
   const { user } = useAuth();
@@ -298,6 +300,8 @@ export default function EmployeesPage() {
       case 'Cashier':
       case 'Receptionist / Cashier':
         return 'ফ্রন্ট ডেস্ক ও ক্যাশ সহকারী';
+      case 'Marketing Officer':
+        return 'মার্কেটিং অফিসার / ফিল্ড এক্সিকিউটিভ';
       case 'Staff':
         return 'ক্লিনিক্যাল অ্যাসিস্ট্যান্ট';
       default:
@@ -362,8 +366,9 @@ export default function EmployeesPage() {
     const receptionistCashiers = employees.filter((e) =>
       e.role === 'Receptionist' || e.role === 'Cashier' || e.role === ('Receptionist / Cashier' as any)
     ).length;
+    const marketingOfficers = employees.filter((e) => e.role === 'Marketing Officer').length;
     const staff = employees.filter((e) => e.role === 'Staff').length;
-    return { total, active, doctors, receptionistCashiers, staff };
+    return { total, active, doctors, receptionistCashiers, marketingOfficers, staff };
   }, [employees]);
 
   // Role style helper
@@ -387,6 +392,14 @@ export default function EmployeesPage() {
           border: 'border-purple-300',
           icon: <UserCheck className="w-3.5 h-3.5" />,
           labelBn: 'রিসেপশনিস্ট ও ক্যাশিয়ার',
+        };
+      case 'Marketing Officer':
+        return {
+          bg: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+          avatarBg: 'bg-emerald-600 text-white',
+          border: 'border-emerald-300',
+          icon: <Target className="w-3.5 h-3.5" />,
+          labelBn: 'মার্কেটিং অফিসার',
         };
       case 'Staff':
       default:
@@ -513,6 +526,7 @@ export default function EmployeesPage() {
               { id: 'Doctor', label: 'Doctor (ডাক্তার)', icon: <Stethoscope className="w-3 h-3" /> },
               { id: 'Receptionist / Cashier', label: 'Receptionist / Cashier (রিসেপশন ও ক্যাশ)', icon: <UserCheck className="w-3 h-3" /> },
               { id: 'Staff', label: 'Staff (স্টাফ)', icon: <ShieldCheck className="w-3 h-3" /> },
+              { id: 'Marketing Officer', label: 'Marketing Officer (মার্কেটিং অফিসার)', icon: <Target className="w-3 h-3" /> },
             ].map((tab) => {
               const isSelected = selectedRole === tab.id;
               return (
@@ -592,10 +606,12 @@ export default function EmployeesPage() {
 
       {/* 4. EMPLOYEE LIST (TABLE OR GRID) */}
       {isLoading ? (
-        <div className="p-12 text-center text-slate-500 bg-white rounded-xl border border-slate-200">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-600 border-t-transparent mb-2"></div>
-          <p className="font-semibold text-xs">লোড হচ্ছে...</p>
-        </div>
+        <DentalLoadingSpinner
+          size="md"
+          text="কর্মচারী তালিকা লোড হচ্ছে..."
+          subtext="টিম মেম্বারদের তথ্য ও পারমিশন লোড করা হচ্ছে..."
+          cardMode={true}
+        />
       ) : filteredEmployees.length === 0 ? (
         <div className="p-12 text-center bg-white rounded-xl border border-dashed border-slate-300">
           <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-3 text-slate-400">
@@ -933,12 +949,13 @@ export default function EmployeesPage() {
                 <label className="font-bold text-slate-800 block mb-1.5">
                   Select Role (পদমর্যাদা নির্বাচন করুন) <span className="text-red-500">*</span>
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                   {(
                     [
                       { role: 'Doctor' as const, labelBn: 'ডাক্তার (ডেন্টাল সার্জন)', icon: <Stethoscope className="w-4 h-4" />, color: 'indigo' },
                       { role: 'Receptionist / Cashier' as const, labelBn: 'রিসেপশনিস্ট ও ক্যাশ সহকারী', icon: <UserCheck className="w-4 h-4" />, color: 'purple' },
                       { role: 'Staff' as const, labelBn: 'ক্লিনিক্যাল স্টাফ (সহকারী)', icon: <ShieldCheck className="w-4 h-4" />, color: 'amber' },
+                      { role: 'Marketing Officer' as const, labelBn: 'মার্কেটিং অফিসার (ফিল্ড সেলস)', icon: <Target className="w-4 h-4" />, color: 'emerald' },
                     ] as const
                   ).map((r) => {
                     const isSelected =

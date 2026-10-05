@@ -39,14 +39,19 @@ function PrescriptionContent() {
   );
 }
 
+import { DentalLoadingSpinner } from '@/components/DentalLoadingSpinner';
+
 export default function PrescriptionPage() {
   return (
     <div className="min-h-full bg-[#eaf2fb] p-1">
       <Suspense
         fallback={
-          <div className="p-8 text-center text-sm font-semibold text-slate-600">
-            প্রেসক্রিপশন লোড হচ্ছে...
-          </div>
+          <DentalLoadingSpinner
+            size="md"
+            text="প্রেসক্রিপশন এডিটর লোড হচ্ছে..."
+            subtext="ক্লিনিক্যাল ডেটা ও ড্রাগ ডাটাবেজ প্রস্তুত করা হচ্ছে..."
+            cardMode={true}
+          />
         }
       >
         <PrescriptionContent />

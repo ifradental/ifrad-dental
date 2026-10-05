@@ -198,7 +198,7 @@ export default function DrugDbPage() {
       body: JSON.stringify({ drug: drugData }),
     })
       .then(() => checkMongoCount())
-      .catch((e) => console.warn('Direct MongoDB save notice:', e));
+      .catch(() => {});
 
     // Reset Form
     setDrugName('');

@@ -33,6 +33,7 @@ import {
 import { db, type ActivityLog, type Employee } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
+import { DentalLoadingSpinner } from '@/components/DentalLoadingSpinner';
 
 export default function ActivitiesPage() {
   const { user } = useAuth();
@@ -595,10 +596,12 @@ export default function ActivitiesPage() {
 
       {/* 4. ACTIVITY LIST (TIMELINE OR TABLE) */}
       {isLoading ? (
-        <div className="p-12 text-center text-slate-500 bg-white rounded-xl border border-slate-200">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-600 border-t-transparent mb-2"></div>
-          <p className="font-semibold text-xs">অ্যাক্টিভিটি হিস্ট্রি লোড হচ্ছে...</p>
-        </div>
+        <DentalLoadingSpinner
+          size="md"
+          text="অ্যাক্টিভিটি হিস্ট্রি লোড হচ্ছে..."
+          subtext="সিস্টেম অডিট ট্রেইল ও লগ সংগ্রহ করা হচ্ছে..."
+          cardMode={true}
+        />
       ) : filteredLogs.length === 0 ? (
         <div className="p-12 text-center bg-white rounded-xl border border-dashed border-slate-300">
           <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-3 text-slate-400">

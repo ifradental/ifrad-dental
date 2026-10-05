@@ -196,7 +196,7 @@ export default function TemplatesPage() {
           body: JSON.stringify({ template: updated }),
         })
           .then(() => checkMongoCount())
-          .catch((err) => console.warn('Direct MongoDB save notice:', err));
+          .catch(() => {});
       }
       setEditingId(null);
       setSyncFeedback(`Template "${newName}" updated in MongoDB!`);
@@ -221,7 +221,7 @@ export default function TemplatesPage() {
         body: JSON.stringify({ template: item }),
       })
         .then(() => checkMongoCount())
-        .catch((err) => console.warn('Direct MongoDB save notice:', err));
+        .catch(() => {});
 
       setSyncFeedback(`Template "${item.name}" added and saved to MongoDB!`);
     }

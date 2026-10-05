@@ -59,7 +59,7 @@ class SyncEngine {
         }
       }, 500);
 
-      // Fast reactive sync loop every 3.5 seconds across all browsers
+      // Periodic background fallback sync every 30 seconds
       this.syncTimer = setInterval(() => {
         if (navigator.onLine) {
           if (!this.isSyncing) {
@@ -69,7 +69,7 @@ class SyncEngine {
             this.pullUpdates().catch(() => {});
           }
         }
-      }, 3500);
+      }, 30000);
     }
   }
 
@@ -183,12 +183,37 @@ class SyncEngine {
   }
 
   /**
+   * Ensures all local marketing tasks and reports are queued and pushed to MongoDB.
+   */
+  public async ensureMarketingSynced(): Promise<void> {
+    try {
+      const localTasks = await db.marketingTasks.toArray();
+      for (const t of localTasks) {
+        const inQueue = await db.syncQueue.where('documentId').equals(t.id).first();
+        if (!inQueue) {
+          await this.logMutation('marketingTasks', 'UPDATE', t.id, t);
+        }
+      }
+      const localReports = await db.marketingReports.toArray();
+      for (const r of localReports) {
+        const inQueue = await db.syncQueue.where('documentId').equals(r.id).first();
+        if (!inQueue) {
+          await this.logMutation('marketingReports', 'UPDATE', r.id, r);
+        }
+      }
+    } catch (e: any) {
+      console.warn('ensureMarketingSynced notice:', e.message);
+    }
+  }
+
+  /**
    * Pushes pending mutations to MongoDB via Next.js API /api/sync/push
    */
   public async triggerSync(): Promise<{ success: boolean; syncedCount: number; message: string }> {
     if (this.isSyncing) return { success: true, syncedCount: 0, message: 'Sync in progress' };
 
     await this.ensureAdminSynced();
+    await this.ensureMarketingSynced();
 
     const settings = await db.settings.get('default_settings');
     // Default to Next.js API route /api/sync so it works natively on Vercel and local
@@ -222,6 +247,8 @@ class SyncEngine {
           mutations: pendingItems,
           timestamp: Date.now(),
         }),
+      }).catch((err) => {
+        throw new Error(err?.message || 'Network offline or server unreachable');
       });
 
       if (!response.ok) {
@@ -272,8 +299,8 @@ class SyncEngine {
         message: `Successfully synced ${queueIdsToDelete.length} of ${pendingItems.length} records to MongoDB Atlas!`,
       };
     } catch (error: any) {
-      console.warn('Sync failed (offline or server unreachable):', error.message);
-      this.status = navigator.onLine ? 'error' : 'offline';
+      // Gracefully handle network disconnection / offline status without throwing uncaught console errors
+      this.status = typeof navigator !== 'undefined' && navigator.onLine ? 'error' : 'offline';
       this.isSyncing = false;
       await this.notify();
 
@@ -303,8 +330,8 @@ class SyncEngine {
         ? new Date(settings.lastSyncedAt).getTime()
         : 0;
 
-      const res = await fetch(`${syncUrl}/pull?since=${lastSyncTime}`);
-      if (!res.ok) {
+      const res = await fetch(`${syncUrl}/pull?since=${lastSyncTime}`).catch(() => null);
+      if (!res || !res.ok) {
         this.isPulling = false;
         return { success: false, pulledCount: 0 };
       }
@@ -332,6 +359,10 @@ class SyncEngine {
         { key: 'stockEntries', table: db.stockEntries },
         { key: 'materialUsages', table: db.materialUsages },
         { key: 'expenses', table: db.expenses },
+        { key: 'cashSubmissions', table: db.cashSubmissions },
+        { key: 'activityLogs', table: db.activityLogs },
+        { key: 'marketingReports', table: db.marketingReports },
+        { key: 'marketingTasks', table: db.marketingTasks },
       ];
 
       for (const { key, table } of tables) {

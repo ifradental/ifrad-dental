@@ -93,10 +93,7 @@ export function Navigation() {
             🦷
           </div>
           <span className="font-bold tracking-wide text-sky-100">
-            ইফরা ডেন্টাল সেন্টার (Web Edition)
-          </span>
-          <span className="bg-sky-500/20 text-sky-200 text-[10px] px-2 py-0.5 rounded-full border border-sky-400/30">
-            Cloud Connected
+            ইফরা ডেন্টাল সেন্টার
           </span>
         </div>
 

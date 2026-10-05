@@ -982,14 +982,16 @@ export function PrescriptionEditor({
         loadedRx = await db.prescriptions.get(initialPrescriptionId);
         if (!loadedRx) {
           try {
-            const res = await fetch(`/api/prescriptions?id=${encodeURIComponent(initialPrescriptionId)}`);
-            const data = await res.json();
-            if (data.success && data.prescription) {
-              loadedRx = data.prescription;
-              await db.prescriptions.put(loadedRx);
+            const res = await fetch(`/api/prescriptions?id=${encodeURIComponent(initialPrescriptionId)}`).catch(() => null);
+            if (res && res.ok) {
+              const data = await res.json().catch(() => null);
+              if (data?.success && data.prescription) {
+                loadedRx = data.prescription;
+                await db.prescriptions.put(loadedRx).catch(() => {});
+              }
             }
-          } catch (e) {
-            console.warn('Could not fetch prescription from MongoDB by ID:', e);
+          } catch {
+            // Local cache is preserved
           }
         }
       }
@@ -1001,32 +1003,36 @@ export function PrescriptionEditor({
           if (ap?.prescriptionId) {
             loadedRx = await db.prescriptions.get(ap.prescriptionId);
             if (!loadedRx) {
-              const res = await fetch(`/api/prescriptions?id=${encodeURIComponent(ap.prescriptionId)}`);
-              const data = await res.json();
-              if (data.success && data.prescription) {
-                loadedRx = data.prescription;
-                await db.prescriptions.put(loadedRx);
+              const res = await fetch(`/api/prescriptions?id=${encodeURIComponent(ap.prescriptionId)}`).catch(() => null);
+              if (res && res.ok) {
+                const data = await res.json().catch(() => null);
+                if (data?.success && data.prescription) {
+                  loadedRx = data.prescription;
+                  await db.prescriptions.put(loadedRx).catch(() => {});
+                }
               }
             }
           }
-        } catch (e) {
-          console.warn('Could not lookup appointment prescriptionId:', e);
+        } catch {
+          // Local cache is preserved
         }
       }
 
       // 3. Try finding by Registration Number (local or cloud)
       if (!loadedRx && initialRegNo) {
-        loadedRx = await db.prescriptions.where('regNo').equals(initialRegNo).last();
+        loadedRx = await db.prescriptions.where('regNo').equals(initialRegNo).last().catch(() => null);
         if (!loadedRx) {
           try {
-            const res = await fetch(`/api/prescriptions?regNo=${initialRegNo}`);
-            const data = await res.json();
-            if (data.success && data.prescriptions && data.prescriptions.length > 0) {
-              loadedRx = data.prescriptions[0];
-              await db.prescriptions.put(loadedRx);
+            const res = await fetch(`/api/prescriptions?regNo=${initialRegNo}`).catch(() => null);
+            if (res && res.ok) {
+              const data = await res.json().catch(() => null);
+              if (data?.success && data.prescriptions && data.prescriptions.length > 0) {
+                loadedRx = data.prescriptions[0];
+                await db.prescriptions.put(loadedRx).catch(() => {});
+              }
             }
-          } catch (e) {
-            console.warn('Could not fetch prescription from MongoDB by RegNo:', e);
+          } catch {
+            // Local cache is preserved
           }
         }
       }
@@ -1034,34 +1040,36 @@ export function PrescriptionEditor({
       // 4. Try finding by Mobile
       if (!loadedRx && initialMobile?.trim()) {
         try {
-          const matchedPatient = await db.patients.where('mobile').equals(initialMobile.trim()).first();
+          const matchedPatient = await db.patients.where('mobile').equals(initialMobile.trim()).first().catch(() => null);
           if (matchedPatient?.regNo) {
-            loadedRx = await db.prescriptions.where('regNo').equals(matchedPatient.regNo).last();
+            loadedRx = await db.prescriptions.where('regNo').equals(matchedPatient.regNo).last().catch(() => null);
           }
-        } catch (e) {
-          console.warn('Patient lookup by mobile notice:', e);
+        } catch {
+          // Ignore
         }
 
         if (!loadedRx) {
           try {
             loadedRx = await db.prescriptions.where('mobile').equals(initialMobile.trim()).last().catch(() => null);
-          } catch (e) {
+          } catch {
             // Fallback to array find if index migration is mid-flight
-            const allRx = await db.prescriptions.toArray();
+            const allRx = await db.prescriptions.toArray().catch(() => []);
             loadedRx = allRx.reverse().find((r) => r.mobile === initialMobile.trim());
           }
         }
 
         if (!loadedRx) {
           try {
-            const res = await fetch(`/api/prescriptions?mobile=${encodeURIComponent(initialMobile.trim())}`);
-            const data = await res.json();
-            if (data.success && data.prescriptions && data.prescriptions.length > 0) {
-              loadedRx = data.prescriptions[0];
-              await db.prescriptions.put(loadedRx);
+            const res = await fetch(`/api/prescriptions?mobile=${encodeURIComponent(initialMobile.trim())}`).catch(() => null);
+            if (res && res.ok) {
+              const data = await res.json().catch(() => null);
+              if (data?.success && data.prescriptions && data.prescriptions.length > 0) {
+                loadedRx = data.prescriptions[0];
+                await db.prescriptions.put(loadedRx).catch(() => {});
+              }
             }
-          } catch (e) {
-            console.warn('Could not fetch prescription from MongoDB by mobile:', e);
+          } catch {
+            // Local cache is preserved
           }
         }
       }
@@ -2135,9 +2143,9 @@ export function PrescriptionEditor({
           appointmentId: targetApntId,
           appointmentStatus,
         }),
-      }).catch((err) => console.warn('Direct MongoDB prescription save notice:', err));
-    } catch (err) {
-      console.warn('MongoDB direct prescription save call failed:', err);
+      }).catch(() => {});
+    } catch {
+      // Local IndexedDB cache is already saved
     }
 
     // If payment made, record in Payments table
@@ -2295,7 +2303,7 @@ export function PrescriptionEditor({
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: targetApntId, status: appointmentStatus, prescriptionId }),
-        }).catch((err) => console.warn('Direct MongoDB apnt patch notice:', err));
+        }).catch(() => {});
       }
 
       // Trigger sync engine to push all pending mutations

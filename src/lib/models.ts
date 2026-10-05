@@ -116,6 +116,15 @@ export const MaterialUsageModel: Model<any> =
   (mongoose.models.MaterialUsage as Model<any>) || mongoose.model('MaterialUsage', GenericSchema);
 export const ExpenseModel: Model<any> =
   (mongoose.models.Expense as Model<any>) || mongoose.model('Expense', GenericSchema);
+export const CashSubmissionModel: Model<any> =
+  (mongoose.models.CashSubmission as Model<any>) || mongoose.model('CashSubmission', GenericSchema);
+export const ActivityLogModel: Model<any> =
+  (mongoose.models.ActivityLog as Model<any>) || mongoose.model('ActivityLog', GenericSchema);
+export const MarketingReportModel: Model<any> =
+  (mongoose.models.MarketingReport as Model<any>) || mongoose.model('MarketingReport', GenericSchema);
+export const MarketingTaskModel: Model<any> =
+  (mongoose.models.MarketingTask as Model<any>) || mongoose.model('MarketingTask', GenericSchema);
+
 // Template Schema with indexes on type and id
 const TemplateSchema = new Schema(
   {
@@ -185,6 +194,10 @@ export const modelMap: Record<string, mongoose.Model<any>> = {
   expenses: ExpenseModel,
   templates: TemplateModel,
   drugs: DrugModel,
+  cashSubmissions: CashSubmissionModel,
+  activityLogs: ActivityLogModel,
+  marketingReports: MarketingReportModel,
+  marketingTasks: MarketingTaskModel,
 };
 
 /**

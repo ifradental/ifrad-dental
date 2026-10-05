@@ -27,7 +27,7 @@ export function LoginScreen() {
 
   // Dynamic Clinic Branding (Loaded from db / server)
   const [clinicLogo, setClinicLogo] = useState<string>('');
-  const [clinicName, setClinicName] = useState<string>('Dentist PRO 7.0');
+  const [clinicName, setClinicName] = useState<string>('ইফরা ডেন্টাল সেন্টার');
 
   // Active view: 'login' or 'forgot'
   const [view, setView] = useState<'login' | 'forgot'>('login');
@@ -287,7 +287,7 @@ export function LoginScreen() {
           <p className="text-xs text-sky-100 mt-1">
             {view === 'forgot'
               ? 'ইমেইল ভেরিফিকেশন ও পাসওয়ার্ড রিসেট'
-              : 'Dental Management & EMR System (Web Edition)'}
+              : 'দাঁতের আধুনিক চিকিৎসাসেবা ও ডিজিটাল ম্যানেজমেন্ট'}
           </p>
         </div>
 

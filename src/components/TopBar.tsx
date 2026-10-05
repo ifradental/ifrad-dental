@@ -357,7 +357,7 @@ export function TopBar() {
                 <div className="text-[11px] text-slate-500 font-mono">Role: {user?.role || 'Doctor'}</div>
                 <div className="mt-1 flex items-center space-x-1 text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded w-fit">
                   <ShieldCheck className="w-3 h-3" />
-                  <span>Web Edition</span>
+                  <span>সক্রিয় অ্যাকাউন্ট</span>
                 </div>
               </div>
 

@@ -275,7 +275,79 @@ export interface ExpenseRecord {
   createdAt: string;
 }
 
-export type EmployeeRole = 'Doctor' | 'Receptionist' | 'Cashier' | 'Receptionist / Cashier' | 'Staff' | 'Admin';
+export interface MarketingReport {
+  id: string;
+  officerId?: string;
+  officerName: string;
+  officerMobile?: string;
+  date: string;
+  area: string; // Territory / Area (e.g. খিলগাঁও, রামপুরা, মিরপুর, ধানমন্ডি)
+  drugHouseName: string; // Pharmacy / Drug house name
+  proprietorName?: string; // Owner / Chemist name
+  phone: string; // Contact phone
+  address?: string; // Location / Address
+  drugName?: string; // Drug / Products sold / discussed
+  quantitySold?: number; // Quantity sold / sample given
+  orderAmount?: number; // Total order/sale amount (Tk)
+  paymentCollected?: number; // Collected amount (Tk)
+  dueAmount?: number; // Due amount (Tk)
+  purpose?: string; // Order / Sample / Follow-up / Payment Collection
+  status?: 'Completed' | 'Pending' | 'Follow-up Needed';
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface VisitedDrugHouse {
+  name: string;
+  proprietor?: string;
+  phone: string;
+  address?: string;
+  drugPromoted?: string;
+  feedback?: string;
+}
+
+export type TaskCategory = 'Pharmacy' | 'Patient' | 'Custom';
+
+export interface MarketingTask {
+  id: string;
+  category?: TaskCategory; // 'Pharmacy' | 'Patient' | 'Custom' (default: 'Pharmacy')
+  title: string;
+  description?: string;
+  area: string;
+  officerId: string;
+  officerName: string;
+  officerMobile?: string;
+  assignedBy: string;
+  assignedDate: string;
+  dueDate: string;
+  priority: 'High' | 'Medium' | 'Normal';
+  targetPharmaciesCount?: number;
+  status: 'Assigned' | 'In_Progress' | 'Submitted' | 'Approved' | 'Rejected';
+  // Patient Details (if category === 'Patient')
+  patientId?: string;
+  patientName?: string;
+  patientMobile?: string;
+  patientAddress?: string;
+  patientNotes?: string;
+  // Pharmacy / Drug Details (if category === 'Pharmacy')
+  targetDrugName?: string;
+  pharmacyName?: string;
+  // Submission by Marketing Officer
+  submissionDate?: string;
+  submittedNotes?: string;
+  visitedDrugHouses?: VisitedDrugHouse[];
+  patientOutcome?: string;
+  customOutcome?: string;
+  // Admin Approval
+  approvedBy?: string;
+  approvedAt?: string;
+  adminRemarks?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EmployeeRole = 'Doctor' | 'Receptionist' | 'Cashier' | 'Receptionist / Cashier' | 'Staff' | 'Marketing Officer' | 'Admin';
 
 export interface Employee {
   id: string;
@@ -478,6 +550,8 @@ class DentalDatabase extends Dexie {
   employees!: Table<Employee, string>;
   activityLogs!: Table<ActivityLog, string>;
   cashSubmissions!: Table<CashSubmission, string>;
+  marketingReports!: Table<MarketingReport, string>;
+  marketingTasks!: Table<MarketingTask, string>;
 
   constructor() {
     super('DentistProDB');
@@ -519,6 +593,12 @@ class DentalDatabase extends Dexie {
     this.version(9).stores({
       prescriptions: 'id, regNo, patientId, mobile, doctorName, workflowStatus, date, createdAt',
       appointments: 'id, regNo, mobile, doctorId, date, status, serial, createdAt',
+    });
+    this.version(10).stores({
+      marketingReports: 'id, officerId, officerName, date, area, drugHouseName, phone, status, createdAt',
+    });
+    this.version(11).stores({
+      marketingTasks: 'id, officerId, officerName, area, status, priority, dueDate, createdAt',
     });
   }
 }

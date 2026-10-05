@@ -523,7 +523,7 @@ export default function AppointmentPage() {
         body: JSON.stringify({ appointment: apntItem }),
       })
         .then(() => checkMongoCount())
-        .catch((e) => console.warn('Direct MongoDB save notice:', e));
+        .catch(() => {});
 
       // 5. If fee was collected, log a payment receipt
       if (Number(visitFee) > 0) {
@@ -601,7 +601,7 @@ export default function AppointmentPage() {
         body: JSON.stringify({ id, status: newStatus }),
       })
         .then(() => checkMongoCount())
-        .catch((e) => console.warn('Direct MongoDB patch notice:', e));
+        .catch(() => {});
 
       logActivity({
         action: 'STATUS_CHANGE',
