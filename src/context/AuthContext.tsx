@@ -16,10 +16,15 @@ export interface User {
   avatar?: string;
 }
 
+export type ClinicalDepartment = 'all' | 'dental' | 'physiotherapy';
+
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   isLoadingSplash: boolean;
+  activeDepartment: ClinicalDepartment;
+  setDepartment: (dept: ClinicalDepartment) => void;
+  toggleDepartment: () => void;
   skipSplash: () => void;
   login: (usernameOrMobile: string, password: string, fallbackRole?: 'doctor' | 'staff' | 'admin' | string) => Promise<boolean>;
   logout: () => void;
@@ -31,10 +36,37 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoadingSplash, setIsLoadingSplash] = useState<boolean>(true);
+  const [activeDepartment, setActiveDepartmentState] = useState<ClinicalDepartment>('all');
+
+  const setDepartment = (dept: ClinicalDepartment) => {
+    setActiveDepartmentState(dept);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('ifrad_active_dept', dept);
+      window.dispatchEvent(new CustomEvent('ifrad_dept_changed', { detail: dept }));
+    }
+  };
+
+  const toggleDepartment = () => {
+    const nextDept: ClinicalDepartment =
+      activeDepartment === 'all'
+        ? 'dental'
+        : activeDepartment === 'dental'
+        ? 'physiotherapy'
+        : 'all';
+    setDepartment(nextDept);
+  };
 
   const skipSplash = () => setIsLoadingSplash(false);
 
   useEffect(() => {
+    // Check saved department
+    if (typeof window !== 'undefined') {
+      const savedDept = localStorage.getItem('ifrad_active_dept') as ClinicalDepartment;
+      if (savedDept === 'physiotherapy' || savedDept === 'dental' || savedDept === 'all') {
+        setActiveDepartmentState(savedDept);
+      }
+    }
+
     // Check if user session was remembered in local storage
     const savedUser = localStorage.getItem('dentist_pro_user');
     if (savedUser) {
@@ -212,7 +244,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, isLoadingSplash, skipSplash, login, logout, updateUser }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        isAuthenticated: !!user,
+        isLoadingSplash,
+        activeDepartment,
+        setDepartment,
+        toggleDepartment,
+        skipSplash,
+        login,
+        logout,
+        updateUser,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

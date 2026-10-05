@@ -207,9 +207,24 @@ export interface PaymentRecord {
   paidAmount: number;
   dueAmount: number;
   method?: string; // Cash, bKash, Nagad, Card, Bank Transfer, Other
+  department?: 'dental' | 'physiotherapy';
   note?: string;
   addedBy?: string;
   status?: string;
+  createdAt: string;
+}
+
+export interface ExpenseRecord {
+  id: string;
+  date: string;
+  category: string; // 'Clinic Rent' | 'Staff Salary' | 'Electricity & Utility' | 'Dental Materials' | 'Physiotherapy Equipment' | 'Marketing' | 'Maintenance' | 'Other';
+  department?: 'all' | 'dental' | 'physiotherapy';
+  title: string;
+  amount: number;
+  paymentMethod?: string;
+  spentBy?: string;
+  note?: string;
+  voucherNo?: string;
   createdAt: string;
 }
 
@@ -271,6 +286,7 @@ export interface ExpenseRecord {
   category: string;
   particular: string;
   amount: number;
+  department?: 'dental' | 'physiotherapy' | 'general';
   note?: string;
   createdAt: string;
 }
@@ -600,6 +616,9 @@ class DentalDatabase extends Dexie {
     this.version(11).stores({
       marketingTasks: 'id, officerId, officerName, area, status, priority, dueDate, createdAt',
     });
+    this.version(12).stores({
+      expenses: 'id, date, category, department, amount, createdAt',
+    });
   }
 }
 
@@ -669,40 +688,45 @@ export async function seedInitialDataIfNeeded() {
   }
 
   // Preload initial drug database matching Dentist PRO & Comprehensive Catalog (20,000+ Medicines) in background
-  setTimeout(async () => {
-    try {
-      const drugsCount = await db.drugs.count();
-      if (drugsCount < 10000) {
-        const chunkSize = 2500;
-        for (let i = 0; i < MEDX_DRUG_DATABASE.length; i += chunkSize) {
-          const chunk = MEDX_DRUG_DATABASE.slice(i, i + chunkSize).map((item, idx) => ({
-            id: `d_seed_${i + idx + 1}`,
-            name: item.name,
-            strength: item.strength,
-            form: item.form,
-            prescriptionName: item.prescriptionName,
-            company: item.company,
-            generic: item.generic,
-            indication: item.indication || `${item.therapeuticCategory}`,
-            drugClass: item.drugClass,
-            createdAt: new Date().toISOString(),
-          }));
-          await db.drugs.bulkPut(chunk);
+  if (typeof window !== 'undefined' && !localStorage.getItem('ifrad_drugs_seeded_v3')) {
+    setTimeout(async () => {
+      try {
+        const drugsCount = await db.drugs.count();
+        if (drugsCount < 10000) {
+          const chunkSize = 2500;
+          for (let i = 0; i < MEDX_DRUG_DATABASE.length; i += chunkSize) {
+            const chunk = MEDX_DRUG_DATABASE.slice(i, i + chunkSize).map((item, idx) => ({
+              id: `d_seed_${i + idx + 1}`,
+              name: item.name,
+              strength: item.strength,
+              form: item.form,
+              prescriptionName: item.prescriptionName,
+              company: item.company,
+              generic: item.generic,
+              indication: item.indication || `${item.therapeuticCategory}`,
+              drugClass: item.drugClass,
+              createdAt: new Date().toISOString(),
+            }));
+            await db.drugs.bulkPut(chunk);
+          }
         }
+        localStorage.setItem('ifrad_drugs_seeded_v3', 'true');
+      } catch (e) {
+        console.warn('Background drug seeding notice:', e);
       }
-    } catch (e) {
-      console.warn('Background drug seeding notice:', e);
-    }
-  }, 50);
+    }, 100);
+  }
 
   // Preload comprehensive templates matching all 16 Dentist PRO categories
-  const templateCount = await db.templates.count();
-  if (templateCount < 40) {
-    const defaultTemplates: TemplateItem[] = [
-      // 1. Treatment Templates
-      { id: 'tmpl_treat_1', type: 'treatment', name: 'Root Canal Treatment (RCT) Protocol', content: 'Diagnosis: Irreversible Pulpitis / Apical Periodontitis | Treatment: Access cavity prep + Pulp extirpation + Biomechanical prep + Ca(OH)2 dressing + Gutta-percha obturation' },
-      { id: 'tmpl_treat_2', type: 'treatment', name: 'Dental Caries & Aesthetic Composite Filling', content: 'Diagnosis: Class I/II Dental Caries | Treatment: Excavation of caries + 37% Phosphoric acid etching + Bonding agent + Light Cure Composite restoration' },
-      { id: 'tmpl_treat_3', type: 'treatment', name: 'Ultrasonic Scaling & Full Mouth Polishing', content: 'Diagnosis: Chronic Marginal Gingivitis with Calculus | Treatment: Supragingival & Subgingival Ultrasonic Scaling + Prophy paste polishing + Chlorhexidine irrigation' },
+  const templatesSeeded = typeof window !== 'undefined' && localStorage.getItem('ifrad_templates_seeded_v3');
+  if (!templatesSeeded) {
+    const templateCount = await db.templates.count();
+    if (templateCount < 40) {
+      const defaultTemplates: TemplateItem[] = [
+        // 1. Treatment Templates
+        { id: 'tmpl_treat_1', type: 'treatment', name: 'Root Canal Treatment (RCT) Protocol', content: 'Diagnosis: Irreversible Pulpitis / Apical Periodontitis | Treatment: Access cavity prep + Pulp extirpation + Biomechanical prep + Ca(OH)2 dressing + Gutta-percha obturation' },
+        { id: 'tmpl_treat_2', type: 'treatment', name: 'Dental Caries & Aesthetic Composite Filling', content: 'Diagnosis: Class I/II Dental Caries | Treatment: Excavation of caries + 37% Phosphoric acid etching + Bonding agent + Light Cure Composite restoration' },
+        { id: 'tmpl_treat_3', type: 'treatment', name: 'Ultrasonic Scaling & Full Mouth Polishing', content: 'Diagnosis: Chronic Marginal Gingivitis with Calculus | Treatment: Supragingival & Subgingival Ultrasonic Scaling + Prophy paste polishing + Chlorhexidine irrigation' },
       { id: 'tmpl_treat_4', type: 'treatment', name: 'Surgical Extraction of Impacted Wisdom Tooth', content: 'Diagnosis: Mesioangular Impacted Mandibular 3rd Molar | Treatment: Mucoperiosteal flap reflection + Bone guttering + Tooth sectioning + Extraction + Silk 3-0 suturing' },
       { id: 'tmpl_treat_5', type: 'treatment', name: 'Ceramic / Zirconia Crown Cap Protocol', content: 'Diagnosis: Post-Endodontic Tooth / Fractured Crown | Treatment: Shoulder/Chamfer finish line tooth prep + Gingival retraction + Addition silicone impression + Temporary crown + Permanent cementation' },
       { id: 'tmpl_treat_6', type: 'treatment', name: 'Pediatric Pulpotomy & SSC', content: 'Diagnosis: Primary Molar Deep Caries with Pulp Exposure | Treatment: Coronal pulp amputation + Hemostasis + Formocresol/MTA + GIC base + Stainless Steel Crown' },
@@ -893,6 +917,10 @@ export async function seedInitialDataIfNeeded() {
         { id: 'dh_auto_10', type: 'drughistory_auto', name: 'Inhaler Salbutamol / Seretide', count: 30 },
       ]);
     }
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('ifrad_templates_seeded_v3', 'true');
+    }
+  }
   }
 
   // Preload sample materials

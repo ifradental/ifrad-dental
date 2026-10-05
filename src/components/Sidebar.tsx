@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { 
   LayoutDashboard,
   FileText, 
@@ -22,7 +22,9 @@ import {
   Users,
   ClipboardList,
   UserCog,
-  Shield
+  Shield,
+  Activity,
+  Sparkles
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/db';
@@ -53,11 +55,12 @@ const allNavItems: NavItem[] = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { user, logout, isAuthenticated } = useAuth();
+  const router = useRouter();
+  const { user, logout, isAuthenticated, activeDepartment, setDepartment } = useAuth();
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<string>('');
   const [clinicLogo, setClinicLogo] = useState<string>('');
-  const [clinicName, setClinicName] = useState<string>('ইফরা ডেন্টাল সেন্টার');
+  const [clinicName, setClinicName] = useState<string>('ইফরা ডেন্টাল ও ফিজিওথেরাপি সেন্টার');
 
   const loadBranding = async () => {
     try {
@@ -94,8 +97,37 @@ export function Sidebar() {
   const isReceptionistOrCashier = userRole.includes('receptionist') || userRole.includes('cashier');
   const isMarketingOrEmployee = userRole.includes('marketing') || userRole.includes('employee') || userRole === 'staff';
 
+  const physioNavItems: NavItem[] = [
+    { name: 'Physiotherapy Dashboard', href: '/dashboard', icon: <Activity className="w-4 h-4 text-emerald-400" /> },
+    { name: 'Patient Management', href: '/patients', icon: <UserCheck className="w-4 h-4 text-cyan-400" />, allowedRoles: ['admin', 'receptionist', 'cashier'] },
+    { name: 'Therapy Rx & Protocol', href: '/prescription', icon: <FileText className="w-4 h-4 text-teal-400" />, allowedRoles: ['admin', 'doctor'] },
+    { name: 'Therapy Appointments', href: '/appointments', icon: <Calendar className="w-4 h-4 text-emerald-400" />, allowedRoles: ['admin', 'doctor', 'receptionist', 'cashier'] },
+    { name: 'Payment & Accounts', href: '/payments', icon: <CreditCard className="w-4 h-4 text-emerald-400" />, allowedRoles: ['admin', 'receptionist', 'cashier'] },
+    { name: 'Employee Management', href: '/employees', icon: <Users className="w-4 h-4" />, allowedRoles: ['admin'] },
+    { name: 'Therapy Materials & Stock', href: '/materials', icon: <Package className="w-4 h-4" />, allowedRoles: ['admin', 'staff', 'receptionist', 'cashier'] },
+    { name: 'Header Edit', href: '/header-edit', icon: <Heading1 className="w-4 h-4" />, allowedRoles: ['admin'] },
+    { name: 'Settings', href: '/settings', icon: <Settings className="w-4 h-4" />, allowedRoles: ['admin', 'doctor'] },
+    { name: 'SMS Gateway', href: '/sms', icon: <MessageSquare className="w-4 h-4" />, allowedRoles: ['admin'] },
+    { name: 'Marketing Officer', href: '/marketing-officer', icon: <UserCog className="w-4 h-4" />, allowedRoles: ['admin'] },
+    { name: 'All Task', href: '/all-tasks', icon: <ClipboardList className="w-4 h-4" /> },
+  ];
+
+  const allOverviewNavItems: NavItem[] = [
+    { name: 'Dashboard (সার্বিক হিসাব)', href: '/dashboard', icon: <LayoutDashboard className="w-4 h-4 text-purple-400" /> },
+  ];
+
+  const currentNavItems = 
+    activeDepartment === 'all' 
+      ? allOverviewNavItems 
+      : activeDepartment === 'physiotherapy' 
+      ? physioNavItems 
+      : allNavItems;
+
   const filteredNavItems = useMemo(() => {
-    return allNavItems.filter((item) => {
+    if (activeDepartment === 'all') {
+      return allOverviewNavItems;
+    }
+    return currentNavItems.filter((item) => {
       // Doctor user sees Dashboard, Appointment, Prescription, Settings, and All Task
       if (userRole === 'doctor') {
         return (
@@ -122,7 +154,7 @@ export function Sidebar() {
       }
       return item.allowedRoles.includes(userRole);
     });
-  }, [userRole, isReceptionistOrCashier, isMarketingOrEmployee]);
+  }, [activeDepartment, userRole, isReceptionistOrCashier, isMarketingOrEmployee, currentNavItems]);
 
   if (!isAuthenticated) return null;
 
@@ -154,8 +186,10 @@ export function Sidebar() {
                   className="w-full h-full object-contain rounded-lg"
                 />
               ) : (
-                <div className="w-full h-full bg-gradient-to-tr from-blue-600 to-cyan-500 rounded-lg flex items-center justify-center text-base">
-                  🦷
+                <div className={`w-full h-full rounded-lg flex items-center justify-center text-base ${
+                  activeDepartment === 'physiotherapy' ? 'bg-gradient-to-tr from-emerald-600 to-teal-500' : 'bg-gradient-to-tr from-blue-600 to-cyan-500'
+                }`}>
+                  {activeDepartment === 'physiotherapy' ? '⚡' : '🦷'}
                 </div>
               )}
             </div>
@@ -167,7 +201,9 @@ export function Sidebar() {
                 >
                   {clinicName}
                 </span>
-                <span className="text-[10px] text-slate-400 truncate">ডেন্টাল ম্যানেজমেন্ট</span>
+                <span className={`text-[10px] truncate ${activeDepartment === 'physiotherapy' ? 'text-emerald-400 font-semibold' : 'text-slate-400'}`}>
+                  {activeDepartment === 'physiotherapy' ? 'ফিজিওথেরাপি ম্যানেজমেন্ট' : 'ডেন্টাল ম্যানেজমেন্ট'}
+                </span>
               </div>
             )}
           </div>
@@ -181,28 +217,127 @@ export function Sidebar() {
           </button>
         </div>
 
-        {/* 2. LOGGED IN USER PROFILE BANNER */}
+        {/* 2. LOGGED IN USER PROFILE BANNER & CLINICAL MODE SWITCHER */}
         {!isCollapsed && user && (
-          <div className="p-2.5 mx-2.5 my-2 bg-slate-900/90 rounded-xl border border-slate-800/80 flex items-center space-x-2.5 shadow-xs">
-            <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-cyan-400 flex-shrink-0 overflow-hidden">
-              {user.avatar ? (
-                <img src={user.avatar} alt="User Avatar" className="w-full h-full object-cover" />
-              ) : userRole === 'doctor' ? (
-                <Stethoscope className="w-4 h-4" />
-              ) : userRole === 'admin' ? (
-                <Shield className="w-4 h-4 text-amber-400" />
-              ) : (
-                <UserCheck className="w-4 h-4 text-cyan-400" />
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-semibold text-white truncate">{user.name}</div>
-              <div className="text-[10px] text-slate-400 mt-0.5">
-                <span className="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] font-medium text-cyan-300 border border-slate-700/60">
-                  {getRoleLabel(userRole)}
-                </span>
+          <div className="p-2.5 mx-2.5 my-2 bg-slate-900/95 rounded-xl border border-slate-800/80 shadow-xs">
+            <div className="flex items-center space-x-2.5">
+              <div className={`w-8 h-8 rounded-full bg-slate-800 border ${
+                activeDepartment === 'physiotherapy' ? 'border-emerald-500 text-emerald-400' : 'border-slate-700 text-cyan-400'
+              } flex items-center justify-center flex-shrink-0 overflow-hidden`}>
+                {user.avatar ? (
+                  <img src={user.avatar} alt="User Avatar" className="w-full h-full object-cover" />
+                ) : activeDepartment === 'physiotherapy' ? (
+                  <Activity className="w-4 h-4 text-emerald-400" />
+                ) : userRole === 'doctor' ? (
+                  <Stethoscope className="w-4 h-4" />
+                ) : userRole === 'admin' ? (
+                  <Shield className="w-4 h-4 text-amber-400" />
+                ) : (
+                  <UserCheck className="w-4 h-4 text-cyan-400" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-semibold text-white truncate">{user.name}</div>
+                <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
+                  <span className="px-1.5 py-0.2 bg-slate-800 rounded text-[10px] font-medium text-cyan-300 border border-slate-700/60">
+                    {getRoleLabel(userRole)}
+                  </span>
+                </div>
               </div>
             </div>
+
+            {/* DEPARTMENT / CLINICAL MODE SWITCHER (সার্বিক ⇄ ডেন্টাল ⇄ ফিজিওথেরাপি) */}
+            <div className="mt-2 pt-2 border-t border-slate-800/80">
+              <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                <span>মোড সুইচ (MODE SWITCH):</span>
+                <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                  activeDepartment === 'all'
+                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                    : activeDepartment === 'physiotherapy'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    : 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                }`}>
+                  {activeDepartment === 'all' ? '🏥 সার্বিক ক্লিনিক' : activeDepartment === 'physiotherapy' ? '⚡ ফিজিওথেরাপি' : '🦷 ডেন্টাল'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+                {/* 1. All Clinic & Accounts */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDepartment('all');
+                    if (pathname !== '/dashboard') router.push('/dashboard');
+                  }}
+                  className={`py-1 px-1 rounded-md text-[9.5px] font-bold transition flex items-center justify-center gap-0.5 cursor-pointer ${
+                    activeDepartment === 'all'
+                      ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-xs ring-1 ring-purple-400/50'
+                      : 'text-slate-400 hover:text-purple-300 hover:bg-slate-800/60'
+                  }`}
+                  title="সার্বিক ক্লিনিক ও কম্বাইন্ড অ্যাকাউন্টস ড্যাশবোর্ড"
+                >
+                  <span>🏥 সার্বিক</span>
+                </button>
+
+                {/* 2. Dental Mode */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDepartment('dental');
+                    if (pathname !== '/dashboard') router.push('/dashboard');
+                  }}
+                  className={`py-1 px-1 rounded-md text-[9.5px] font-bold transition flex items-center justify-center gap-0.5 cursor-pointer ${
+                    activeDepartment === 'dental'
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs ring-1 ring-blue-400/50'
+                      : 'text-slate-400 hover:text-blue-300 hover:bg-slate-800/60'
+                  }`}
+                  title="ডেন্টাল মোডে সুইচ করুন"
+                >
+                  <span>🦷 ডেন্টাল</span>
+                </button>
+
+                {/* 3. Physiotherapy Mode */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDepartment('physiotherapy');
+                    if (pathname !== '/dashboard') router.push('/dashboard');
+                  }}
+                  className={`py-1 px-1 rounded-md text-[9.5px] font-bold transition flex items-center justify-center gap-0.5 cursor-pointer ${
+                    activeDepartment === 'physiotherapy'
+                      ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-xs ring-1 ring-emerald-400/50'
+                      : 'text-slate-400 hover:text-emerald-300 hover:bg-slate-800/60'
+                  }`}
+                  title="ফিজিওথেরাপি মোডে সুইচ করুন"
+                >
+                  <span className="text-emerald-300">⚡</span>
+                  <span>ফিজিও</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Collapsed mode quick toggle */}
+        {isCollapsed && user && (
+          <div className="p-2 flex flex-col items-center border-b border-slate-800/80">
+            <button
+              type="button"
+              onClick={() => {
+                const next = activeDepartment === 'all' ? 'dental' : activeDepartment === 'dental' ? 'physiotherapy' : 'all';
+                setDepartment(next);
+                if (pathname !== '/dashboard') router.push('/dashboard');
+              }}
+              className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm shadow-xs transition cursor-pointer ${
+                activeDepartment === 'all'
+                  ? 'bg-gradient-to-tr from-purple-600 to-indigo-600 text-white ring-2 ring-purple-400/60 shadow-purple-900/30'
+                  : activeDepartment === 'physiotherapy'
+                  ? 'bg-gradient-to-tr from-emerald-600 to-teal-500 text-white ring-2 ring-emerald-400/60 shadow-emerald-900/30'
+                  : 'bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-blue-900/30'
+              }`}
+              title={`মোড সুইচ করুন: বর্তমানে ${activeDepartment === 'all' ? 'সার্বিক ক্লিনিক' : activeDepartment === 'physiotherapy' ? 'ফিজিওথেরাপি' : 'ডেন্টাল'}`}
+            >
+              {activeDepartment === 'all' ? '🏥' : activeDepartment === 'physiotherapy' ? '⚡' : '🦷'}
+            </button>
           </div>
         )}
 

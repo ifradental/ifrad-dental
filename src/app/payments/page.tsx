@@ -32,7 +32,12 @@ import {
   CheckCircle,
   XCircle,
   Eye,
-  BadgeAlert
+  BadgeAlert,
+  Activity,
+  Stethoscope,
+  Zap,
+  Phone,
+  User
 } from 'lucide-react';
 import { 
   db, 
@@ -40,19 +45,27 @@ import {
   type ExpenseRecord, 
   type Prescription, 
   type CashSubmission, 
-  type ClinicSettings 
+  type ClinicSettings,
+  type Patient 
 } from '@/lib/db';
 import { syncEngine } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
 import { logActivity } from '@/lib/activityLogger';
 import CashSubmissionVoucherModal from '@/components/payments/CashSubmissionVoucherModal';
+import PaymentReceiptModal from '@/components/payments/PaymentReceiptModal';
+import ExpenseVoucherModal from '@/components/payments/ExpenseVoucherModal';
 
 export default function PaymentsPage() {
-  const { user } = useAuth();
+  const { user, activeDepartment } = useAuth();
   const isAdmin = user?.role?.toLowerCase() === 'admin';
   const isReceptionistOrCashier = 
     user?.role?.toLowerCase().includes('receptionist') || 
     user?.role?.toLowerCase().includes('cashier');
+
+  // Department Filter: 'all' | 'dental' | 'physiotherapy'
+  const [departmentFilter, setDepartmentFilter] = useState<'all' | 'dental' | 'physiotherapy'>(
+    activeDepartment === 'physiotherapy' ? 'physiotherapy' : 'all'
+  );
 
   const [activeTab, setActiveTab] = useState<'payments' | 'cash_submissions' | 'doctor_prescriptions' | 'expenses' | 'summary'>('payments');
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
@@ -60,16 +73,36 @@ export default function PaymentsPage() {
   const [pendingPrescriptions, setPendingPrescriptions] = useState<Prescription[]>([]);
   const [cashSubmissions, setCashSubmissions] = useState<CashSubmission[]>([]);
   const [clinicSettings, setClinicSettings] = useState<ClinicSettings | null>(null);
+  const [patients, setPatients] = useState<Patient[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Quick Collect Payment Modal State
+  // Quick Collect Payment Modal State (From Doctor Queue)
   const [collectingRx, setCollectingRx] = useState<Prescription | null>(null);
   const [collectAmount, setCollectAmount] = useState<number>(0);
   const [collectMethod, setCollectMethod] = useState<string>('Cash');
   const [collectNote, setCollectNote] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
+  // Direct Payment / Receipt Collection Modal (Receptionist counter)
+  const [isDirectModalOpen, setIsDirectModalOpen] = useState<boolean>(false);
+  const [directDept, setDirectDept] = useState<'dental' | 'physiotherapy'>('dental');
+  const [directRegNo, setDirectRegNo] = useState<string>('');
+  const [directName, setDirectName] = useState<string>('');
+  const [directMobile, setDirectMobile] = useState<string>('');
+  const [directParticulars, setDirectParticulars] = useState<string>('');
+  const [directTotalBill, setDirectTotalBill] = useState<number>(500);
+  const [directPaidAmount, setDirectPaidAmount] = useState<number>(500);
+  const [directDiscount, setDirectDiscount] = useState<number>(0);
+  const [directMethod, setDirectMethod] = useState<string>('Cash');
+  const [directNote, setDirectNote] = useState<string>('');
+  const [directDoctorName, setDirectDoctorName] = useState<string>('');
+
+  // Receipt Modal State for instant print
+  const [selectedPaymentForReceipt, setSelectedPaymentForReceipt] = useState<PaymentRecord | null>(null);
+  const [selectedExpenseForVoucher, setSelectedExpenseForVoucher] = useState<ExpenseRecord | null>(null);
+
   // Add Expense Form State
+  const [expenseDepartment, setExpenseDepartment] = useState<'dental' | 'physiotherapy' | 'general'>('general');
   const [expenseCategory, setExpenseCategory] = useState<string>('Materials');
   const [expenseParticular, setExpenseParticular] = useState<string>('');
   const [expenseAmount, setExpenseAmount] = useState<number>(0);
@@ -94,18 +127,27 @@ export default function PaymentsPage() {
     loadData();
   }, []);
 
+  // Synchronize department filter if user changes global context
+  useEffect(() => {
+    if (activeDepartment === 'physiotherapy') {
+      setDepartmentFilter('physiotherapy');
+    }
+  }, [activeDepartment]);
+
   const loadData = async () => {
     try {
-      const [payList, expList, allRx, subs, settingsList] = await Promise.all([
+      const [payList, expList, allRx, subs, settingsList, ptList] = await Promise.all([
         db.payments.reverse().toArray(),
         db.expenses.reverse().toArray(),
         db.prescriptions.reverse().toArray(),
         db.cashSubmissions.reverse().toArray(),
         db.settings.toArray(),
+        db.patients.toArray(),
       ]);
 
       setPayments(payList);
       setExpenses(expList);
+      setPatients(ptList);
 
       const pending = allRx.filter((rx) => rx.workflowStatus === 'sent_to_cashier');
       setPendingPrescriptions(pending);
@@ -121,11 +163,122 @@ export default function PaymentsPage() {
     }
   };
 
-  // Totals and KPI calculations
-  const totalCollected = useMemo(() => payments.reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0), [payments]);
-  const totalDueAmount = useMemo(() => payments.reduce((sum, p) => sum + (Number(p.dueAmount) || 0), 0), [payments]);
-  const totalExpended = useMemo(() => expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0), [expenses]);
+  // Helper classification functions
+  const isPhysioPayment = (p: PaymentRecord) => {
+    if (p.department === 'physiotherapy') return true;
+    if (p.department === 'dental') return false;
+    const txt = `${p.particulars || ''} ${p.note || ''}`.toLowerCase();
+    return (
+      txt.includes('physio') ||
+      txt.includes('ফিজিওথেরাপি') ||
+      txt.includes('therapy') ||
+      txt.includes('থেরাপি') ||
+      txt.includes('ust') ||
+      txt.includes('ift') ||
+      txt.includes('traction') ||
+      txt.includes('tens') ||
+      txt.includes('stroke') ||
+      txt.includes('rehab') ||
+      txt.includes('paraffin') ||
+      txt.includes('সেশন') ||
+      txt.includes('মডালিটি')
+    );
+  };
+
+  const isDentalPayment = (p: PaymentRecord) => {
+    if (p.department === 'dental') return true;
+    if (p.department === 'physiotherapy') return false;
+    return !isPhysioPayment(p);
+  };
+
+  const isPhysioRx = (rx: Prescription) => {
+    if (rx.department === 'physiotherapy') return true;
+    const txt = `${rx.doctorName || ''} ${rx.contract?.particulars || ''}`.toLowerCase();
+    return (
+      txt.includes('physio') ||
+      txt.includes('ফিজিওথেরাপি') ||
+      txt.includes('therapy') ||
+      txt.includes('থেরাপিস্ট')
+    );
+  };
+
+  // Filtered Payments based on Department and Search
+  const filteredPayments = useMemo(() => {
+    return payments.filter((p) => {
+      if (departmentFilter === 'dental' && !isDentalPayment(p)) return false;
+      if (departmentFilter === 'physiotherapy' && !isPhysioPayment(p)) return false;
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = p.name?.toLowerCase().includes(q);
+        const matchReg = p.regNo?.toString().includes(q);
+        const matchMobile = p.mobile?.includes(q);
+        const matchParticulars = p.particulars?.toLowerCase().includes(q);
+        if (!matchName && !matchReg && !matchMobile && !matchParticulars) return false;
+      }
+      return true;
+    });
+  }, [payments, departmentFilter, searchQuery]);
+
+  // Filtered Expenses
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter((e) => {
+      if (departmentFilter === 'dental' && e.department === 'physiotherapy') return false;
+      if (departmentFilter === 'physiotherapy' && e.department === 'dental') return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchParticular = e.particular?.toLowerCase().includes(q);
+        const matchCategory = e.category?.toLowerCase().includes(q);
+        if (!matchParticular && !matchCategory) return false;
+      }
+      return true;
+    });
+  }, [expenses, departmentFilter, searchQuery]);
+
+  // Filtered Pending Prescriptions
+  const filteredPendingPrescriptions = useMemo(() => {
+    return pendingPrescriptions.filter((rx) => {
+      if (departmentFilter === 'dental' && isPhysioRx(rx)) return false;
+      if (departmentFilter === 'physiotherapy' && !isPhysioRx(rx)) return false;
+      return true;
+    });
+  }, [pendingPrescriptions, departmentFilter]);
+
+  // Totals and KPI calculations based on selected department filter
+  const totalCollected = useMemo(() => {
+    const list = departmentFilter === 'all' 
+      ? payments 
+      : departmentFilter === 'dental' 
+        ? payments.filter(isDentalPayment) 
+        : payments.filter(isPhysioPayment);
+    return list.reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0);
+  }, [payments, departmentFilter]);
+
+  const totalDueAmount = useMemo(() => {
+    const list = departmentFilter === 'all' 
+      ? payments 
+      : departmentFilter === 'dental' 
+        ? payments.filter(isDentalPayment) 
+        : payments.filter(isPhysioPayment);
+    return list.reduce((sum, p) => sum + (Number(p.dueAmount) || 0), 0);
+  }, [payments, departmentFilter]);
+
+  const totalExpended = useMemo(() => {
+    const list = departmentFilter === 'all'
+      ? expenses
+      : departmentFilter === 'dental'
+        ? expenses.filter(e => e.department !== 'physiotherapy')
+        : expenses.filter(e => e.department === 'physiotherapy');
+    return list.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  }, [expenses, departmentFilter]);
+
   const netIncome = totalCollected - totalExpended;
+
+  // Department wise breakdown stats
+  const dentalTotalCollected = useMemo(() => payments.filter(isDentalPayment).reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0), [payments]);
+  const physioTotalCollected = useMemo(() => payments.filter(isPhysioPayment).reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0), [payments]);
+  const dentalTotalExpended = useMemo(() => expenses.filter(e => e.department !== 'physiotherapy').reduce((sum, e) => sum + (Number(e.amount) || 0), 0), [expenses]);
+  const physioTotalExpended = useMemo(() => expenses.filter(e => e.department === 'physiotherapy').reduce((sum, e) => sum + (Number(e.amount) || 0), 0), [expenses]);
 
   // Cash Submission calculations
   const approvedSubmissions = useMemo(() => cashSubmissions.filter((s) => s.status === 'Approved'), [cashSubmissions]);
@@ -133,10 +286,11 @@ export default function PaymentsPage() {
   const totalApprovedAmount = useMemo(() => approvedSubmissions.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0), [approvedSubmissions]);
   const totalPendingAmount = useMemo(() => pendingSubmissions.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0), [pendingSubmissions]);
 
-  // Unsubmitted cash balance (Total collected minus already approved and pending submissions)
+  // Unsubmitted cash balance
   const unsubmittedCashBalance = useMemo(() => {
-    return Math.max(0, totalCollected - totalApprovedAmount - totalPendingAmount);
-  }, [totalCollected, totalApprovedAmount, totalPendingAmount]);
+    const allCol = payments.reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0);
+    return Math.max(0, allCol - totalApprovedAmount - totalPendingAmount);
+  }, [payments, totalApprovedAmount, totalPendingAmount]);
 
   // Today's specific collections
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
@@ -145,6 +299,106 @@ export default function PaymentsPage() {
       .filter((p) => p.date === todayStr)
       .reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0);
   }, [payments, todayStr]);
+
+  // Open Direct Payment Collection Modal
+  const handleOpenDirectPaymentModal = (dept?: 'dental' | 'physiotherapy') => {
+    const targetDept = dept || (departmentFilter === 'physiotherapy' ? 'physiotherapy' : 'dental');
+    setDirectDept(targetDept);
+    setDirectRegNo('');
+    setDirectName('');
+    setDirectMobile('');
+    if (targetDept === 'physiotherapy') {
+      setDirectParticulars('Physiotherapy Session & Modality Fee');
+      setDirectTotalBill(500);
+      setDirectPaidAmount(500);
+      setDirectDoctorName('ফিজিওথেরাপিস্ট');
+    } else {
+      setDirectParticulars('Dental Consultation & Treatment');
+      setDirectTotalBill(500);
+      setDirectPaidAmount(500);
+      setDirectDoctorName('ডা. নাহিদ হাসান');
+    }
+    setDirectDiscount(0);
+    setDirectMethod('Cash');
+    setDirectNote('');
+    setIsDirectModalOpen(true);
+  };
+
+  // Handle Reg No or Mobile change to autofill patient info
+  const handleRegNoLookup = (val: string) => {
+    setDirectRegNo(val);
+    const regNum = Number(val);
+    if (!isNaN(regNum) && regNum > 0) {
+      const match = patients.find((p) => p.regNo === regNum);
+      if (match) {
+        setDirectName(match.name || '');
+        setDirectMobile(match.mobile || '');
+      }
+    }
+  };
+
+  // Submit Direct Payment
+  const handleSubmitDirectPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const paid = Number(directPaidAmount) || 0;
+    const total = Number(directTotalBill) || paid;
+    const disc = Number(directDiscount) || 0;
+    const payable = Math.max(0, total - disc);
+    const due = Math.max(0, payable - paid);
+
+    if (paid <= 0 && payable <= 0) {
+      alert('অনুগ্রহ করে বিল বা জমা টাকার পরিমাণ লিখুন!');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      let regNo = Number(directRegNo);
+      if (!regNo || isNaN(regNo)) {
+        regNo = Math.floor(10000 + Math.random() * 90000);
+      }
+
+      const paymentRecord: PaymentRecord = {
+        id: `pay_${regNo}_${Date.now()}`,
+        regNo,
+        name: directName.trim() || 'Walk-in Patient',
+        mobile: directMobile.trim(),
+        date: new Date().toISOString().split('T')[0],
+        particulars: directParticulars.trim() || (directDept === 'physiotherapy' ? 'Physiotherapy Treatment' : 'Dental Treatment'),
+        totalBill: total,
+        discount: disc,
+        payableAmount: payable,
+        paidAmount: paid,
+        dueAmount: due,
+        method: directMethod,
+        department: directDept,
+        note: directNote.trim() || (directDoctorName ? `Dr: ${directDoctorName}` : undefined),
+        addedBy: user?.name || (isReceptionistOrCashier ? 'Receptionist' : 'Cashier'),
+        status: due > 0 ? 'Partial' : 'Paid',
+        createdAt: new Date().toISOString(),
+      };
+
+      await db.payments.put(paymentRecord);
+      await syncEngine.logMutation('payments', 'INSERT', paymentRecord.id, paymentRecord);
+
+      logActivity({
+        action: 'COLLECT_DIRECT_PAYMENT',
+        module: 'Payment',
+        description: `রিসেপশনে ${directDept === 'physiotherapy' ? 'ফিজিওথেরাপি' : 'ডেন্টাল'} ফি ৳${paid.toLocaleString()} জমা নেয়া হয়েছে (পেশেন্ট: ${paymentRecord.name}, Reg: #${regNo})`,
+        metadata: paymentRecord,
+        user: user || undefined,
+      });
+
+      setIsDirectModalOpen(false);
+      await loadData();
+      setSelectedPaymentForReceipt(paymentRecord);
+    } catch (err) {
+      console.error(err);
+      alert('পেমেন্ট সেভ করতে সমস্যা হয়েছে।');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   // Open Cash Submission Modal
   const handleOpenSubmitCashModal = () => {
@@ -308,15 +562,23 @@ export default function PaymentsPage() {
   // Handle Add Expense
   const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!expenseParticular.trim() || !expenseAmount) return;
+    if (!expenseParticular.trim() || !expenseAmount || Number(expenseAmount) <= 0) {
+      alert('অনুগ্রহ করে খরচের বিবরণ ও টাকার পরিমাণ দিন!');
+      return;
+    }
 
+    const deptVal = expenseDepartment === 'general' ? 'all' : expenseDepartment;
     const expItem: ExpenseRecord = {
-      id: `exp_${Date.now()}`,
+      id: `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       date: expenseDate,
       category: expenseCategory,
-      particular: expenseParticular,
+      department: deptVal as any,
+      title: expenseParticular.trim(),
       amount: Number(expenseAmount),
-      note: expenseNote,
+      paymentMethod: 'Cash',
+      spentBy: user?.name || 'Receptionist',
+      voucherNo: `EXP-${Date.now().toString().slice(-6)}`,
+      note: expenseNote.trim(),
       createdAt: new Date().toISOString(),
     };
 
@@ -326,7 +588,7 @@ export default function PaymentsPage() {
     logActivity({
       action: 'ADD_EXPENSE',
       module: 'Payment',
-      description: `ক্লিনিক খরচ এন্ট্রি: ৳${expItem.amount.toLocaleString()} (${expItem.category} - ${expItem.particular})`,
+      description: `ক্লিনিক খরচ এন্ট্রি: ৳${expItem.amount.toLocaleString()} (${expItem.category} - ${expItem.title})`,
       metadata: expItem,
       user: user || undefined,
     });
@@ -334,8 +596,8 @@ export default function PaymentsPage() {
     setExpenseParticular('');
     setExpenseAmount(0);
     setExpenseNote('');
-    loadData();
-    alert('খরচ সফলভাবে এন্ট্রি হয়েছে!');
+    await loadData();
+    setSelectedExpenseForVoucher(expItem);
   };
 
   const handleOpenCollectModal = async (rx: Prescription) => {
@@ -452,6 +714,13 @@ export default function PaymentsPage() {
                 <span className="bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded text-[10px]">
                   পেমেন্ট, আয়-ব্যয় ও ক্যাশ জমাদান
                 </span>
+                {departmentFilter !== 'all' && (
+                  <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                    departmentFilter === 'physiotherapy' ? 'bg-teal-100 text-teal-800 border border-teal-300' : 'bg-blue-100 text-blue-800 border border-blue-300'
+                  }`}>
+                    {departmentFilter === 'physiotherapy' ? '⚡ ফিজিওথেরাপি ফিল্টার' : '🦷 ডেন্টাল ফিল্টার'}
+                  </span>
+                )}
               </div>
               <p className="text-slate-500 text-xs">
                 Patient billing, cashier daily collections, cash submission to admin, and clinic expense ledger
@@ -460,6 +729,16 @@ export default function PaymentsPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            {/* Direct Collection Button for Receptionist */}
+            <button
+              type="button"
+              onClick={() => handleOpenDirectPaymentModal()}
+              className="px-3.5 py-1.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-teal-600 hover:from-blue-700 hover:to-teal-700 text-white font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition-all"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ রসিদ সংগ্রহ (Direct Bill)</span>
+            </button>
+
             {/* Tab: Doctor Prescriptions */}
             <button
               onClick={() => setActiveTab('doctor_prescriptions')}
@@ -471,14 +750,14 @@ export default function PaymentsPage() {
             >
               <Clock className="w-3.5 h-3.5" />
               <span>ডাক্তার থেকে প্রাপ্ত বিল</span>
-              {pendingPrescriptions.length > 0 && (
+              {filteredPendingPrescriptions.length > 0 && (
                 <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.2 rounded-full font-black animate-pulse">
-                  {pendingPrescriptions.length}
+                  {filteredPendingPrescriptions.length}
                 </span>
               )}
             </button>
 
-            {/* Tab: Cash Submissions (NEW) */}
+            {/* Tab: Cash Submissions */}
             <button
               onClick={() => setActiveTab('cash_submissions')}
               className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition ${
@@ -528,6 +807,86 @@ export default function PaymentsPage() {
           </div>
         </div>
 
+        {/* DEPARTMENT SWITCHER BAR (DENTAL vs PHYSIOTHERAPY vs ALL) */}
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 mb-3.5 flex flex-wrap items-center justify-between gap-2.5 shadow-xs">
+          <div className="flex items-center space-x-2">
+            <span className="font-extrabold text-slate-700 text-xs flex items-center gap-1.5">
+              <Filter className="w-3.5 h-3.5 text-slate-500" />
+              <span>ডিপার্টমেন্ট অ্যাকাউন্টস নির্বাচন:</span>
+            </span>
+
+            <div className="inline-flex bg-white p-1 rounded-lg border border-slate-200 shadow-2xs gap-1">
+              {/* All Clinic */}
+              <button
+                type="button"
+                onClick={() => setDepartmentFilter('all')}
+                className={`px-3 py-1 rounded-md font-bold text-xs transition-all flex items-center gap-1.5 ${
+                  departmentFilter === 'all'
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>🏥 সার্বিক ক্লিনিক (All)</span>
+                <span className="text-[10px] font-mono opacity-80">
+                  (৳{(dentalTotalCollected + physioTotalCollected).toLocaleString()})
+                </span>
+              </button>
+
+              {/* Dental Accounts */}
+              <button
+                type="button"
+                onClick={() => setDepartmentFilter('dental')}
+                className={`px-3 py-1 rounded-md font-bold text-xs transition-all flex items-center gap-1.5 ${
+                  departmentFilter === 'dental'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-blue-900 hover:bg-blue-50'
+                }`}
+              >
+                <Stethoscope className="w-3.5 h-3.5" />
+                <span>🦷 ডেন্টাল অ্যাকাউন্টস (Dental)</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 bg-blue-100 text-blue-900 rounded font-bold">
+                  ৳{dentalTotalCollected.toLocaleString()}
+                </span>
+              </button>
+
+              {/* Physiotherapy Accounts */}
+              <button
+                type="button"
+                onClick={() => setDepartmentFilter('physiotherapy')}
+                className={`px-3 py-1 rounded-md font-bold text-xs transition-all flex items-center gap-1.5 ${
+                  departmentFilter === 'physiotherapy'
+                    ? 'bg-teal-600 text-white shadow-xs'
+                    : 'text-teal-900 hover:bg-teal-50'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-300" />
+                <span>⚡ ফিজিওথেরাপি অ্যাকাউন্টস (Physio)</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 bg-teal-100 text-teal-900 rounded font-bold">
+                  ৳{physioTotalCollected.toLocaleString()}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={() => handleOpenDirectPaymentModal('dental')}
+              className="px-2.5 py-1 bg-blue-50 text-blue-800 border border-blue-200 hover:bg-blue-100 font-bold rounded-lg text-xs flex items-center gap-1 transition"
+            >
+              <span>🦷 + ডেন্টাল পেমেন্ট</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOpenDirectPaymentModal('physiotherapy')}
+              className="px-2.5 py-1 bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100 font-bold rounded-lg text-xs flex items-center gap-1 transition"
+            >
+              <span>⚡ + ফিজিওথেরাপি পেমেন্ট</span>
+            </button>
+          </div>
+        </div>
+
         {/* 5 Financial KPI Widgets */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 mb-4 text-xs">
           <div className="bg-emerald-50/90 border border-emerald-200 rounded-xl p-3 shadow-xs">
@@ -538,7 +897,9 @@ export default function PaymentsPage() {
             <div className="text-lg sm:text-xl font-black font-mono text-emerald-950 mt-1">
               ৳ {totalCollected.toLocaleString()}
             </div>
-            <span className="text-[9px] text-emerald-600 block mt-0.5">সর্বমোট সংগৃহীত বিল</span>
+            <span className="text-[9px] text-emerald-600 block mt-0.5">
+              {departmentFilter === 'physiotherapy' ? 'ফিজিওথেরাপি সংগৃহীত বিল' : departmentFilter === 'dental' ? 'ডেন্টাল সংগৃহীত বিল' : 'সর্বমোট সংগৃহীত বিল'}
+            </span>
           </div>
 
           <div className="bg-amber-50/90 border border-amber-300 rounded-xl p-3 shadow-xs">
@@ -580,12 +941,14 @@ export default function PaymentsPage() {
               <UserCheck className="w-3.5 h-3.5 text-sky-600" />
             </div>
             <div className="text-lg sm:text-xl font-black font-mono text-sky-950 mt-1 flex items-center justify-between">
-              <span>{pendingPrescriptions.length} Patients</span>
+              <span>{filteredPendingPrescriptions.length} Patients</span>
               <span className="text-[10px] bg-sky-200 text-sky-900 px-1.5 py-0.5 rounded font-bold">
                 Collect Bill
               </span>
             </div>
-            <span className="text-[9px] text-sky-600 block mt-0.5">ডাক্তার থেকে প্রাপ্ত প্রেসক্রিপশন</span>
+            <span className="text-[9px] text-sky-600 block mt-0.5">
+              {departmentFilter === 'physiotherapy' ? 'ফিজিওথেরাপি প্রেসক্রিপশন' : departmentFilter === 'dental' ? 'ডেন্টাল প্রেসক্রিপশন' : 'ডাক্তার থেকে প্রাপ্ত প্রেসক্রিপশন'}
+            </span>
           </div>
 
           <div className="bg-red-50/90 border border-red-200 rounded-xl p-3 shadow-xs">
@@ -596,12 +959,14 @@ export default function PaymentsPage() {
             <div className="text-lg sm:text-xl font-black font-mono text-red-950 mt-1">
               ৳ {totalExpended.toLocaleString()}
             </div>
-            <span className="text-[9px] text-red-600 block mt-0.5">ক্লিনিক খরচ ভাউচার</span>
+            <span className="text-[9px] text-red-600 block mt-0.5">
+              {departmentFilter === 'physiotherapy' ? 'ফিজিওথেরাপি খরচ' : departmentFilter === 'dental' ? 'ডেন্টাল ক্লিনিক খরচ' : 'মোট ক্লিনিক খরচ'}
+            </span>
           </div>
         </div>
 
         {/* ========================================================================= */}
-        {/* TAB: CASH SUBMISSIONS & HANDOVER APPROVALS (NEW MODULE) */}
+        {/* TAB: CASH SUBMISSIONS & HANDOVER APPROVALS */}
         {/* ========================================================================= */}
         {activeTab === 'cash_submissions' && (
           <div className="space-y-4">
@@ -817,69 +1182,156 @@ export default function PaymentsPage() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 1: PAYMENTS LIST (Matching payment sub menu.png) */}
+        {/* TAB 1: PAYMENTS LIST (WITH DENTAL VS PHYSIOTHERAPY BADGES & RECEIPT PRINT) */}
         {/* ========================================================================= */}
         {activeTab === 'payments' && (
           <div className="space-y-3">
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-slate-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search payments by Patient Name, Reg No, Mobile..."
-                className="w-full pl-8 pr-3 py-1.5 border border-slate-300 rounded text-xs"
-              />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="relative flex-1 min-w-[260px]">
+                <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search payments by Patient Name, Reg No, Mobile, Particulars..."
+                  className="w-full pl-8 pr-3 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 font-medium">
+                  মোট ট্রানজেকশন: <strong className="text-slate-800">{filteredPayments.length}</strong> টি
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleOpenDirectPaymentModal()}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 shadow-xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>পেমেন্ট এন্ট্রি</span>
+                </button>
+              </div>
             </div>
 
-            <div className="overflow-x-auto border border-slate-200 rounded text-xs">
-              <table className="w-full text-left">
-                <thead className="bg-sky-50 text-slate-700 border-b border-slate-200 font-semibold">
-                  <tr>
-                    <th className="p-2 w-10 text-center">SI</th>
-                    <th className="p-2 w-24">Date</th>
-                    <th className="p-2 w-20">Reg. No</th>
-                    <th className="p-2">Name</th>
-                    <th className="p-2 w-28">Mobile</th>
-                    <th className="p-2">Particulars</th>
-                    <th className="p-2 w-24 text-right">Total Bill</th>
-                    <th className="p-2 w-24 text-right">Paid (TK)</th>
-                    <th className="p-2 w-24 text-right">Due (TK)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {payments
-                    .filter(
-                      (p) =>
-                        p.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        p.regNo?.toString().includes(searchQuery)
-                    )
-                    .map((pay, i) => (
-                      <tr key={pay.id} className="hover:bg-sky-50/40">
-                        <td className="p-2 text-center text-slate-500 font-semibold">{i + 1}</td>
-                        <td className="p-2 font-medium">{pay.date}</td>
-                        <td className="p-2 font-mono font-bold text-blue-900">{pay.regNo}</td>
-                        <td className="p-2 font-bold text-slate-900">{pay.name}</td>
-                        <td className="p-2 font-mono text-slate-600">{pay.mobile}</td>
-                        <td className="p-2 text-slate-700">{pay.particulars}</td>
-                        <td className="p-2 text-right font-semibold">৳ {pay.totalBill}</td>
-                        <td className="p-2 text-right font-bold text-emerald-700">৳ {pay.paidAmount}</td>
-                        <td className="p-2 text-right font-bold text-red-600">৳ {pay.dueAmount}</td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
+            {filteredPayments.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 bg-slate-50 border border-slate-200 rounded-xl">
+                কোনো পেমেন্ট রেকর্ড পাওয়া যায়নি।
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-xs bg-white text-xs">
+                <table className="w-full text-left">
+                  <thead className="bg-sky-50 text-slate-700 border-b border-slate-200 font-semibold">
+                    <tr>
+                      <th className="p-2.5 w-10 text-center">SI</th>
+                      <th className="p-2.5 w-24">Date</th>
+                      <th className="p-2.5 w-28 text-center">Department</th>
+                      <th className="p-2.5 w-20">Reg. No</th>
+                      <th className="p-2.5">Name</th>
+                      <th className="p-2.5 w-28">Mobile</th>
+                      <th className="p-2.5">Particulars</th>
+                      <th className="p-2.5 w-24 text-right">Total Bill</th>
+                      <th className="p-2.5 w-24 text-right">Paid (TK)</th>
+                      <th className="p-2.5 w-24 text-right">Due (TK)</th>
+                      <th className="p-2.5 w-28 text-center">Receipt</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredPayments.map((pay, i) => {
+                      const isPhysio = isPhysioPayment(pay);
+                      return (
+                        <tr key={pay.id} className="hover:bg-sky-50/40 transition-colors">
+                          <td className="p-2.5 text-center text-slate-500 font-semibold">{i + 1}</td>
+                          <td className="p-2.5 font-medium whitespace-nowrap">{pay.date}</td>
+                          <td className="p-2.5 text-center whitespace-nowrap">
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                                isPhysio
+                                  ? 'bg-teal-100 text-teal-800 border border-teal-300'
+                                  : 'bg-blue-100 text-blue-800 border border-blue-300'
+                              }`}
+                            >
+                              {isPhysio ? (
+                                <>
+                                  <Zap className="w-3 h-3 text-amber-500" />
+                                  <span>ফিজিওথেরাপি</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Stethoscope className="w-3 h-3 text-blue-600" />
+                                  <span>ডেন্টাল</span>
+                                </>
+                              )}
+                            </span>
+                          </td>
+                          <td className="p-2.5 font-mono font-bold text-blue-900">{pay.regNo}</td>
+                          <td className="p-2.5 font-bold text-slate-900">{pay.name}</td>
+                          <td className="p-2.5 font-mono text-slate-600">{pay.mobile || '-'}</td>
+                          <td className="p-2.5 text-slate-700">
+                            <div>{pay.particulars}</div>
+                            {pay.note && <div className="text-[10px] text-slate-400">{pay.note}</div>}
+                          </td>
+                          <td className="p-2.5 text-right font-semibold">৳ {pay.totalBill}</td>
+                          <td className="p-2.5 text-right font-black text-emerald-700 font-mono">৳ {pay.paidAmount}</td>
+                          <td className="p-2.5 text-right font-bold text-red-600 font-mono">
+                            {pay.dueAmount > 0 ? `৳ ${pay.dueAmount}` : '-'}
+                          </td>
+                          <td className="p-2.5 text-center whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPaymentForReceipt(pay)}
+                              className="px-2 py-1 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 rounded font-semibold text-[11px] flex items-center justify-center gap-1 mx-auto transition"
+                              title="Print Money Receipt"
+                            >
+                              <Printer className="w-3 h-3 text-slate-500" />
+                              <span>রসিদ</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 2: EXPENSES ENTRY (Matching expenditure entry.png) */}
+        {/* TAB 2: EXPENSES ENTRY (WITH DENTAL / PHYSIOTHERAPY / GENERAL SELECTOR) */}
         {/* ========================================================================= */}
         {activeTab === 'expenses' && (
           <div className="space-y-4">
             <form onSubmit={handleAddExpense} className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs">
-              <div className="font-bold text-blue-900 mb-2">Daily Clinic Expense Voucher Entry</div>
+              <div className="flex justify-between items-center mb-2">
+                <div className="font-bold text-blue-900">Daily Clinic Expense Voucher Entry</div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-slate-600 font-medium">বিভাগ (Department):</span>
+                  <div className="inline-flex bg-white rounded border border-slate-300 p-0.5 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setExpenseDepartment('general')}
+                      className={`px-2 py-0.5 rounded font-bold ${expenseDepartment === 'general' ? 'bg-slate-800 text-white' : 'text-slate-600'}`}
+                    >
+                      🏢 সার্বিক/সাধারণ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExpenseDepartment('dental')}
+                      className={`px-2 py-0.5 rounded font-bold ${expenseDepartment === 'dental' ? 'bg-blue-600 text-white' : 'text-blue-800'}`}
+                    >
+                      🦷 ডেন্টাল
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExpenseDepartment('physiotherapy')}
+                      className={`px-2 py-0.5 rounded font-bold ${expenseDepartment === 'physiotherapy' ? 'bg-teal-600 text-white' : 'text-teal-800'}`}
+                    >
+                      ⚡ ফিজিওথেরাপি
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-12 gap-2">
                 <div className="col-span-12 md:col-span-3">
                   <label className="block text-slate-600 font-medium mb-0.5">Category</label>
@@ -888,12 +1340,25 @@ export default function PaymentsPage() {
                     onChange={(e) => setExpenseCategory(e.target.value)}
                     className="w-full px-2 py-1.5 border border-slate-300 rounded bg-white"
                   >
-                    <option value="Dental Materials">Dental Materials &amp; Medicines</option>
-                    <option value="Lab Bills">Dental Lab Bills (Crown/Denture)</option>
-                    <option value="Clinic Rent & Utility">Clinic Rent &amp; Electricity</option>
-                    <option value="Staff Salary">Staff &amp; Assistant Salary</option>
-                    <option value="Equipment Maintenance">Equipment Maintenance</option>
-                    <option value="Others">Others</option>
+                    {expenseDepartment === 'physiotherapy' ? (
+                      <>
+                        <option value="Physio Gel & Consumables">Therapy Gel, Electrodes &amp; Straps</option>
+                        <option value="Physio Equipment Maintenance">Machine Maintenance (UST, IFT, Traction)</option>
+                        <option value="Therapist Honorarium">Physiotherapist Honorarium / Commission</option>
+                        <option value="Clinic Rent & Utility">Clinic Rent &amp; Electricity</option>
+                        <option value="Staff Salary">Staff &amp; Assistant Salary</option>
+                        <option value="Others">Others</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="Dental Materials">Dental Materials &amp; Medicines</option>
+                        <option value="Lab Bills">Dental Lab Bills (Crown/Denture)</option>
+                        <option value="Clinic Rent & Utility">Clinic Rent &amp; Electricity</option>
+                        <option value="Staff Salary">Staff &amp; Assistant Salary</option>
+                        <option value="Equipment Maintenance">Equipment Maintenance</option>
+                        <option value="Others">Others</option>
+                      </>
+                    )}
                   </select>
                 </div>
 
@@ -904,7 +1369,7 @@ export default function PaymentsPage() {
                     required
                     value={expenseParticular}
                     onChange={(e) => setExpenseParticular(e.target.value)}
-                    placeholder="e.g. Composite resin purchase / Ceramic crown bill"
+                    placeholder={expenseDepartment === 'physiotherapy' ? 'e.g. Ultrasound conductive gel / TENS pad' : 'e.g. Composite resin / Ceramic crown bill'}
                     className="w-full px-2 py-1.5 border border-slate-300 rounded bg-white"
                   />
                 </div>
@@ -942,25 +1407,49 @@ export default function PaymentsPage() {
               </div>
             </form>
 
-            <div className="overflow-x-auto border border-slate-200 rounded text-xs">
+            <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-xs bg-white text-xs">
               <table className="w-full text-left">
-                <thead className="bg-slate-100 text-slate-700 border-b border-slate-200 font-semibold">
+                <thead className="bg-rose-50/70 text-slate-700 border-b border-slate-200 font-semibold">
                   <tr>
-                    <th className="p-2 w-10 text-center">SI</th>
-                    <th className="p-2 w-28">Date</th>
-                    <th className="p-2 w-44">Category</th>
-                    <th className="p-2">Particulars</th>
-                    <th className="p-2 w-28 text-right">Amount (TK)</th>
+                    <th className="p-2.5 w-10 text-center">SI</th>
+                    <th className="p-2.5 w-24">তারিখ</th>
+                    <th className="p-2.5 w-24 font-mono">ভাউচার নং</th>
+                    <th className="p-2.5 w-24 text-center">বিভাগ</th>
+                    <th className="p-2.5 w-40">ক্যাটাগরি</th>
+                    <th className="p-2.5">খরচের বিবরণ</th>
+                    <th className="p-2.5 w-24 text-right">পরিমাণ (টাকা)</th>
+                    <th className="p-2.5 w-28 text-center">ভাউচার রসিদ</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {expenses.map((exp, i) => (
-                    <tr key={exp.id} className="hover:bg-slate-50">
-                      <td className="p-2 text-center text-slate-500">{i + 1}</td>
-                      <td className="p-2 font-medium">{exp.date}</td>
-                      <td className="p-2 font-semibold text-slate-800">{exp.category}</td>
-                      <td className="p-2 text-slate-700">{exp.particular}</td>
-                      <td className="p-2 text-right font-bold text-red-600">৳ {exp.amount}</td>
+                  {filteredExpenses.map((exp: any, i) => (
+                    <tr key={exp.id} className="hover:bg-rose-50/30 transition-colors">
+                      <td className="p-2.5 text-center text-slate-500 font-semibold">{i + 1}</td>
+                      <td className="p-2.5 font-medium whitespace-nowrap">{exp.date}</td>
+                      <td className="p-2.5 font-mono font-bold text-rose-700">{exp.voucherNo || '-'}</td>
+                      <td className="p-2.5 text-center whitespace-nowrap">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          exp.department === 'physiotherapy' ? 'bg-teal-100 text-teal-800 border border-teal-300' : exp.department === 'dental' ? 'bg-blue-100 text-blue-800 border border-blue-300' : 'bg-slate-100 text-slate-700 border border-slate-300'
+                        }`}>
+                          {exp.department === 'physiotherapy' ? '⚡ ফিজিও' : exp.department === 'dental' ? '🦷 ডেন্টাল' : '🏢 সার্বিক'}
+                        </span>
+                      </td>
+                      <td className="p-2.5 font-semibold text-slate-800">{exp.category}</td>
+                      <td className="p-2.5 text-slate-700 font-medium">
+                        <div>{exp.title || exp.particular}</div>
+                        {exp.note && <div className="text-[10px] text-slate-400">{exp.note}</div>}
+                      </td>
+                      <td className="p-2.5 text-right font-black text-rose-700 font-mono">৳ {(exp.amount || 0).toLocaleString()}</td>
+                      <td className="p-2.5 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedExpenseForVoucher(exp)}
+                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg font-bold text-[11px] inline-flex items-center gap-1 transition cursor-pointer shadow-2xs"
+                        >
+                          <Printer className="w-3 h-3 text-rose-600" />
+                          <span>ভাউচার</span>
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -970,21 +1459,97 @@ export default function PaymentsPage() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 3: SUMMARY */}
+        {/* TAB 3: SUMMARY (WITH DENTAL VS PHYSIOTHERAPY COMPARISON) */}
         {/* ========================================================================= */}
         {activeTab === 'summary' && (
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded text-xs space-y-3">
-            <h3 className="font-bold text-sm text-slate-800">Monthly Financial Overview</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-3 bg-white rounded border border-slate-200 space-y-2">
-                <div className="font-bold text-emerald-800 border-b pb-1">Total Earnings (Cash Received)</div>
-                <div className="text-2xl font-bold font-mono text-emerald-700">৳ {totalCollected}</div>
-                <p className="text-slate-500 text-[11px]">From {payments.length} patient transactions</p>
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-4">
+            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+              <TrendingUp className="w-4 h-4 text-emerald-600" />
+              <span>ডিপার্টমেন্ট ভিত্তিক আয়-ব্যয় ও লাভ-ক্ষতির পূর্ণাঙ্গ চিত্র (Financial Overview)</span>
+            </h3>
+
+            {/* Department Breakdown Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Dental Unit Card */}
+              <div className="p-4 bg-white rounded-xl border-2 border-blue-200 shadow-xs space-y-3">
+                <div className="flex items-center justify-between border-b pb-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold">🦷</span>
+                    <div>
+                      <h4 className="font-extrabold text-blue-900 text-sm">ডেন্টাল বিভাগ (Dental Unit)</h4>
+                      <span className="text-[10px] text-slate-500">ডেন্টাল কনসালটেশন, ওপিজি ও সকল ট্রিটমেন্ট</span>
+                    </div>
+                  </div>
+                  <span className="text-[11px] bg-blue-50 text-blue-800 font-bold px-2 py-0.5 rounded">
+                    {payments.filter(isDentalPayment).length} Patients
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-100">
+                    <span className="text-[10px] text-emerald-700 font-bold block uppercase">মোট আয় (Income)</span>
+                    <span className="text-lg font-black font-mono text-emerald-950">৳ {dentalTotalCollected.toLocaleString()}</span>
+                  </div>
+                  <div className="p-2.5 bg-red-50 rounded-lg border border-red-100">
+                    <span className="text-[10px] text-red-700 font-bold block uppercase">মোট খরচ (Expense)</span>
+                    <span className="text-lg font-black font-mono text-red-950">৳ {dentalTotalExpended.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="p-2.5 bg-blue-50/70 rounded-lg border border-blue-200 flex justify-between items-center font-bold">
+                  <span className="text-blue-900">ডেন্টাল নিট ক্যাশ প্রফিট:</span>
+                  <span className="font-mono text-base font-black text-blue-950">
+                    ৳ {(dentalTotalCollected - dentalTotalExpended).toLocaleString()}
+                  </span>
+                </div>
               </div>
-              <div className="p-3 bg-white rounded border border-slate-200 space-y-2">
-                <div className="font-bold text-red-800 border-b pb-1">Total Clinic Expenditure</div>
-                <div className="text-2xl font-bold font-mono text-red-700">৳ {totalExpended}</div>
-                <p className="text-slate-500 text-[11px]">From {expenses.length} expense vouchers</p>
+
+              {/* Physiotherapy Unit Card */}
+              <div className="p-4 bg-white rounded-xl border-2 border-teal-200 shadow-xs space-y-3">
+                <div className="flex items-center justify-between border-b pb-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="w-7 h-7 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center font-bold">⚡</span>
+                    <div>
+                      <h4 className="font-extrabold text-teal-900 text-sm">ফিজিওথেরাপি বিভাগ (Physiotherapy Unit)</h4>
+                      <span className="text-[10px] text-slate-500">ইলেক্ট্রোথেরাপি, ট্র্যাকশন ও রিহ্যাব সেশন</span>
+                    </div>
+                  </div>
+                  <span className="text-[11px] bg-teal-50 text-teal-800 font-bold px-2 py-0.5 rounded">
+                    {payments.filter(isPhysioPayment).length} Patients
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-100">
+                    <span className="text-[10px] text-emerald-700 font-bold block uppercase">মোট আয় (Income)</span>
+                    <span className="text-lg font-black font-mono text-emerald-950">৳ {physioTotalCollected.toLocaleString()}</span>
+                  </div>
+                  <div className="p-2.5 bg-red-50 rounded-lg border border-red-100">
+                    <span className="text-[10px] text-red-700 font-bold block uppercase">মোট খরচ (Expense)</span>
+                    <span className="text-lg font-black font-mono text-red-950">৳ {physioTotalExpended.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="p-2.5 bg-teal-50/70 rounded-lg border border-teal-200 flex justify-between items-center font-bold">
+                  <span className="text-teal-900">ফিজিওথেরাপি নিট ক্যাশ প্রফিট:</span>
+                  <span className="font-mono text-base font-black text-teal-950">
+                    ৳ {(physioTotalCollected - physioTotalExpended).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Overall Summary Bar */}
+            <div className="p-3 bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-950 text-white rounded-xl shadow flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <span className="text-[10px] text-slate-300 block uppercase font-bold">সার্বিক ক্লিনিক ব্যালেন্স (All Total)</span>
+                <span className="text-xl font-black font-mono">৳ {(dentalTotalCollected + physioTotalCollected).toLocaleString()}</span>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] text-slate-300 block uppercase font-bold">মোট ব্যয় বাদ দিয়ে নিট উদ্বৃত্ত</span>
+                <span className="text-xl font-black font-mono text-emerald-300">
+                  ৳ {(dentalTotalCollected + physioTotalCollected - dentalTotalExpended - physioTotalExpended).toLocaleString()}
+                </span>
               </div>
             </div>
           </div>
@@ -1003,13 +1568,13 @@ export default function PaymentsPage() {
                 </p>
               </div>
               <span className="font-black text-sm bg-amber-200 text-amber-950 px-2.5 py-1 rounded-full">
-                {pendingPrescriptions.length} টি পেন্ডিং
+                {filteredPendingPrescriptions.length} টি পেন্ডিং
               </span>
             </div>
 
-            {pendingPrescriptions.length === 0 ? (
+            {filteredPendingPrescriptions.length === 0 ? (
               <div className="py-12 text-center text-slate-400 bg-slate-50 border border-slate-200 rounded text-xs">
-                বর্তমানে ডাক্তার থেকে কোনো প্রেসক্রিপশন পেন্ডিং নেই।
+                বর্তমানে কোনো প্রেসক্রিপশন পেন্ডিং নেই।
               </div>
             ) : (
               <div className="overflow-x-auto border border-slate-200 rounded text-xs">
@@ -1018,6 +1583,7 @@ export default function PaymentsPage() {
                     <tr>
                       <th className="p-2 w-10 text-center">SI</th>
                       <th className="p-2 w-24">Date</th>
+                      <th className="p-2 w-24 text-center">Department</th>
                       <th className="p-2 w-20">Reg. No</th>
                       <th className="p-2">Patient Name</th>
                       <th className="p-2 w-28">Mobile</th>
@@ -1029,14 +1595,22 @@ export default function PaymentsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {pendingPrescriptions.map((rx, idx) => {
+                    {filteredPendingPrescriptions.map((rx, idx) => {
                       const totalBill = rx.contract?.payableAmount || rx.payment?.totalBill || 0;
                       const paid = rx.payment?.totalPaid || 0;
                       const due = Math.max(0, totalBill - paid);
+                      const isPhysio = isPhysioRx(rx);
                       return (
                         <tr key={rx.id} className="hover:bg-amber-50/40">
                           <td className="p-2 text-center text-slate-500 font-semibold">{idx + 1}</td>
                           <td className="p-2 font-medium">{rx.date}</td>
+                          <td className="p-2 text-center whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              isPhysio ? 'bg-teal-100 text-teal-800' : 'bg-blue-100 text-blue-800'
+                            }`}>
+                              {isPhysio ? '⚡ ফিজিওথেরাপি' : '🦷 ডেন্টাল'}
+                            </span>
+                          </td>
                           <td className="p-2 font-mono font-bold text-blue-900">{rx.regNo}</td>
                           <td className="p-2 font-bold text-slate-900">{rx.patientName}</td>
                           <td className="p-2 font-mono text-slate-600">{rx.mobile || '-'}</td>
@@ -1073,265 +1647,323 @@ export default function PaymentsPage() {
         )}
 
         {/* ========================================================================= */}
-        {/* MODAL: SUBMIT CASH TO ADMIN (FOR RECEPTIONIST / CASHIER) */}
+        {/* MODAL: DIRECT PAYMENT & RECEIPT COLLECTION (RECEPTIONIST COUNTER) */}
         {/* ========================================================================= */}
-        {isSubmitModalOpen && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 animate-in fade-in duration-150">
-            <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-300 text-xs">
-              <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-emerald-800 text-white px-5 py-3.5 flex justify-between items-center">
-                <div className="flex items-center space-x-2">
-                  <DollarSign className="w-5 h-5 text-emerald-200" />
+        {isDirectModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 animate-in fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden border border-slate-300 text-xs">
+              <div className={`px-5 py-3.5 flex justify-between items-center text-white ${
+                directDept === 'physiotherapy'
+                  ? 'bg-gradient-to-r from-teal-700 via-teal-800 to-cyan-800'
+                  : 'bg-gradient-to-r from-blue-700 via-indigo-700 to-sky-700'
+              }`}>
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center font-bold">
+                    {directDept === 'physiotherapy' ? '⚡' : '🦷'}
+                  </div>
                   <div>
-                    <h3 className="font-extrabold text-sm">Submit Cash to Admin / ক্যাশ জমা দিন</h3>
-                    <span className="text-[10px] text-emerald-100">ক্যাশিয়ার হ্যান্ডওভার ও জমার আবেদন</span>
+                    <h3 className="font-extrabold text-sm">
+                      {directDept === 'physiotherapy' ? 'ফিজিওথেরাপি ফি আদায় ও রসিদ (Physiotherapy Billing)' : 'ডেন্টাল পেমেন্ট আদায় ও রসিদ (Dental Billing)'}
+                    </h3>
+                    <span className="text-[10px] text-white/80">রিসেপশন কাউন্টারে সরাসরি ফি সংগ্রহ ও মানি রসিদ প্রিন্ট</span>
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsSubmitModalOpen(false)}
+                  onClick={() => setIsDirectModalOpen(false)}
                   className="hover:bg-white/20 p-1 rounded-lg text-white"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <form onSubmit={handleSubmitCash} className="p-5 space-y-3.5">
-                {/* Cashier Info Card */}
-                <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 grid grid-cols-2 gap-2 text-xs">
-                  <div>
-                    <span className="text-[10px] text-slate-400 block uppercase font-semibold">Cashier</span>
-                    <span className="font-bold text-slate-900">{user?.name || 'Cashier'}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 block uppercase font-semibold">Unsubmitted Balance</span>
-                    <span className="font-bold text-amber-800 font-mono">৳ {unsubmittedCashBalance.toLocaleString()}</span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">
-                      নগদ টাকা (Cash Amount - ৳) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      required
-                      min="0"
-                      value={submitCashAmount || ''}
-                      onChange={(e) => setSubmitCashAmount(Number(e.target.value))}
-                      placeholder="0"
-                      className="w-full px-3 py-2 border-2 border-emerald-500 rounded-lg text-sm font-bold text-right text-emerald-950 bg-emerald-50/30 focus:outline-none focus:bg-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">
-                      বিকাশ / ডিজিটাল (Digital MFS - ৳)
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={submitDigitalAmount || ''}
-                      onChange={(e) => setSubmitDigitalAmount(Number(e.target.value))}
-                      placeholder="0"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-bold text-right text-slate-900 focus:outline-none focus:border-emerald-600"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">শিফট / সময়কাল</label>
-                    <select
-                      value={submitShiftPeriod}
-                      onChange={(e) => setSubmitShiftPeriod(e.target.value)}
-                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+              <form onSubmit={handleSubmitDirectPayment} className="p-5 space-y-3.5 max-h-[85vh] overflow-y-auto">
+                {/* Department Toggle */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">বিভাগ নির্বাচন করুন (Select Department):</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDirectDept('dental');
+                        setDirectParticulars('Dental Consultation & Treatment');
+                        setDirectDoctorName('ডা. নাহিদ হাসান');
+                      }}
+                      className={`p-2.5 rounded-xl border-2 font-bold text-xs flex items-center justify-center gap-2 transition ${
+                        directDept === 'dental'
+                          ? 'border-blue-600 bg-blue-50 text-blue-900 shadow-xs'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
                     >
-                      <option value="মর্নিং শিফট (Morning Shift)">মর্নিং শিফট (Morning Shift)</option>
-                      <option value="সান্ধ্যকালীন শিফট (Evening Shift)">সান্ধ্যকালীন শিফট (Evening Shift)</option>
-                      <option value="সারাদিনের কালেকশন (Full Day)">সারাদিনের কালেকশন (Full Day)</option>
-                      <option value="বিশেষ কালেকশন (Special Collection)">বিশেষ কালেকশন</option>
-                    </select>
+                      <Stethoscope className="w-4 h-4 text-blue-600" />
+                      <span>🦷 ডেন্টাল বিভাগ (Dental)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDirectDept('physiotherapy');
+                        setDirectParticulars('Physiotherapy Session & Modality Fee');
+                        setDirectDoctorName('ফিজিওথেরাপিস্ট');
+                      }}
+                      className={`p-2.5 rounded-xl border-2 font-bold text-xs flex items-center justify-center gap-2 transition ${
+                        directDept === 'physiotherapy'
+                          ? 'border-teal-600 bg-teal-50 text-teal-900 shadow-xs'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Zap className="w-4 h-4 text-teal-600" />
+                      <span>⚡ ফিজিওথেরাপি বিভাগ (Physio)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quick Presets */}
+                <div>
+                  <label className="block text-slate-500 font-semibold mb-1 text-[11px]">
+                    কুইক সার্ভিস প্রিসেট (Quick Preset Buttons):
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {directDept === 'dental' ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('Dental Consultation Fee');
+                            setDirectTotalBill(500);
+                            setDirectPaidAmount(500);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-blue-100 text-blue-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          কনসালটেশন (৳৫০০)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('Scaling & Polishing');
+                            setDirectTotalBill(1500);
+                            setDirectPaidAmount(1500);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-blue-100 text-blue-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          স্কেলিং ও পলিশিং (৳১,৫০০)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('Tooth Extraction / দাঁত তোলা');
+                            setDirectTotalBill(1000);
+                            setDirectPaidAmount(1000);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-blue-100 text-blue-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          দাঁত তোলা (৳১,০০০)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('Root Canal Treatment (RCT)');
+                            setDirectTotalBill(3500);
+                            setDirectPaidAmount(1500);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-blue-100 text-blue-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          রুট ক্যানেল (৳৩,৫০০)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('Composite Tooth Filling');
+                            setDirectTotalBill(1200);
+                            setDirectPaidAmount(1200);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-blue-100 text-blue-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          কম্পোজিট ফিলিং (৳১,২০০)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('Ceramic Crown / Cap');
+                            setDirectTotalBill(4000);
+                            setDirectPaidAmount(2000);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-blue-100 text-blue-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          ক্যাপ/ক্রাউন (৳৪,০০০)
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('Physiotherapy Single Session Fee');
+                            setDirectTotalBill(500);
+                            setDirectPaidAmount(500);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-teal-100 text-teal-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          সেশন ফি (৳৫০০)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('UST + IFT Combo Electrotherapy');
+                            setDirectTotalBill(800);
+                            setDirectPaidAmount(800);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-teal-100 text-teal-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          UST+IFT কম্বো (৳৮০০)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('Cervical / Lumbar Traction Therapy');
+                            setDirectTotalBill(700);
+                            setDirectPaidAmount(700);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-teal-100 text-teal-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          ট্র্যাকশন থেরাপি (৳৭০০)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('Stroke & Neuro Rehabilitation Session');
+                            setDirectTotalBill(1200);
+                            setDirectPaidAmount(1200);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-teal-100 text-teal-900 rounded font-semibold text-[11px] border border-slate-200"
+                        >
+                          স্ট্রোক রিহ্যাব (৳১,২০০)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectParticulars('10-Session Full Physio Package');
+                            setDirectTotalBill(4500);
+                            setDirectPaidAmount(4500);
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-teal-100 text-teal-900 rounded font-semibold text-[11px] border border-slate-200 font-bold"
+                        >
+                          ১০-সেশন প্যাকেজ (৳৪,৫০০)
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Patient Information */}
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2.5">
+                  <div className="grid grid-cols-12 gap-2">
+                    <div className="col-span-12 sm:col-span-4">
+                      <label className="block font-bold text-slate-700 mb-0.5">রেজিস্ট্রেশন নং (Reg No)</label>
+                      <input
+                        type="text"
+                        value={directRegNo}
+                        onChange={(e) => handleRegNoLookup(e.target.value)}
+                        placeholder="e.g. 1001"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-mono font-bold bg-white focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div className="col-span-12 sm:col-span-8">
+                      <label className="block font-bold text-slate-700 mb-0.5">রোগীর নাম (Patient Name) *</label>
+                      <input
+                        type="text"
+                        required
+                        value={directName}
+                        onChange={(e) => setDirectName(e.target.value)}
+                        placeholder="রোগীর নাম লিখুন..."
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-bold bg-white focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-2">
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="block text-slate-600 font-medium mb-0.5">মোবাইল নম্বর (Mobile)</label>
+                      <input
+                        type="text"
+                        value={directMobile}
+                        onChange={(e) => setDirectMobile(e.target.value)}
+                        placeholder="017XXXXXXXX"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-mono bg-white focus:outline-none"
+                      />
+                    </div>
+                    <div className="col-span-12 sm:col-span-6">
+                      <label className="block text-slate-600 font-medium mb-0.5">ডাক্তার / থেরাপিস্ট নাম</label>
+                      <input
+                        type="text"
+                        value={directDoctorName}
+                        onChange={(e) => setDirectDoctorName(e.target.value)}
+                        placeholder="ডা. নাহিদ হাসান / থেরাপিস্ট"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Particulars */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">ট্রিটমেন্ট / সেবার বিবরণ (Particulars) *</label>
+                  <input
+                    type="text"
+                    required
+                    value={directParticulars}
+                    onChange={(e) => setDirectParticulars(e.target.value)}
+                    placeholder="সেবার বিবরণ লিখুন..."
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white font-medium focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* Financials & Calculation */}
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">মোট বিল (Total Bill - ৳)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={directTotalBill || ''}
+                      onChange={(e) => setDirectTotalBill(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-mono font-bold text-right text-slate-900"
+                    />
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">জমার তারিখ</label>
-                    <input
-                      type="date"
-                      value={submitDate}
-                      onChange={(e) => setSubmitDate(e.target.value)}
-                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">বিশেষ মন্তব্য / নোট (ঐচ্ছিক)</label>
-                  <textarea
-                    rows={2}
-                    value={submitNotes}
-                    onChange={(e) => setSubmitNotes(e.target.value)}
-                    placeholder="নোট বা ব্যাংক ট্রানজেকশন রেফারেন্স লিখুন..."
-                    className="w-full p-2 border border-slate-300 rounded-lg focus:outline-none focus:border-emerald-600"
-                  />
-                </div>
-
-                <div className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-200 flex justify-between items-center text-emerald-950 font-bold">
-                  <span>সর্বমোট জমা হওয়ার পরিমাণ:</span>
-                  <span className="text-base font-black text-emerald-800">
-                    ৳ {(Number(submitCashAmount) + Number(submitDigitalAmount)).toLocaleString()}
-                  </span>
-                </div>
-
-                <div className="pt-2 flex justify-between items-center border-t border-slate-200">
-                  <button
-                    type="button"
-                    onClick={() => setIsSubmitModalOpen(false)}
-                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg transition"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow flex items-center space-x-1.5 transition"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>জমা দিন (Submit to Admin)</span>
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* MODAL: ADMIN REJECT REMARKS */}
-        {/* ========================================================================= */}
-        {rejectingSubmission && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 animate-in fade-in">
-            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 text-xs">
-              <h3 className="font-bold text-sm text-red-900 mb-1 flex items-center gap-1.5">
-                <XCircle className="w-4 h-4 text-red-600" />
-                <span>ক্যাশ জমার আবেদন বাতিল করুন</span>
-              </h3>
-              <p className="text-slate-500 mb-3">
-                ভাউচার #{rejectingSubmission.submissionNo} (৳{rejectingSubmission.totalAmount.toLocaleString()})
-              </p>
-
-              <form onSubmit={handleRejectSubmission} className="space-y-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">বাতিল করার কারণ / মন্তব্য *</label>
-                  <textarea
-                    required
-                    rows={3}
-                    value={rejectRemarks}
-                    onChange={(e) => setRejectRemarks(e.target.value)}
-                    placeholder="হিসাবের অমিল বা কারণ লিখুন..."
-                    className="w-full p-2 border border-slate-300 rounded-lg focus:outline-none focus:border-red-500"
-                  />
-                </div>
-
-                <div className="flex justify-end space-x-2 pt-2 border-t">
-                  <button
-                    type="button"
-                    onClick={() => setRejectingSubmission(null)}
-                    className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 rounded font-semibold text-slate-700"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded font-bold shadow"
-                  >
-                    Confirm Reject
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* MODAL: CASH HANDOVER VOUCHER PRINT SLIP */}
-        {/* ========================================================================= */}
-        {selectedSubmissionForVoucher && (
-          <CashSubmissionVoucherModal
-            submission={selectedSubmissionForVoucher}
-            clinicSettings={clinicSettings}
-            onClose={() => setSelectedSubmissionForVoucher(null)}
-          />
-        )}
-
-        {/* ========================================================================= */}
-        {/* QUICK COLLECT PAYMENT MODAL */}
-        {/* ========================================================================= */}
-        {collectingRx && (
-          <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3">
-            <div className="bg-white rounded-lg border border-slate-300 shadow-xl max-w-md w-full p-4 text-xs animate-in fade-in zoom-in-95">
-              <div className="flex items-center justify-between pb-2 mb-3 border-b border-slate-200">
-                <div className="flex items-center space-x-2">
-                  <CreditCard className="w-4 h-4 text-emerald-600" />
-                  <span className="font-bold text-slate-900 text-sm">
-                    পেমেন্ট সংগ্রহ ও ডাক্তারের কাছে ফেরত পাঠান
-                  </span>
-                </div>
-                <button
-                  onClick={() => setCollectingRx(null)}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="mb-3 bg-slate-50 p-2.5 rounded border border-slate-200 space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">রোগীর নাম:</span>
-                  <span className="font-bold text-slate-900">{collectingRx.patientName}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">রেজিস্ট্রেশন নং:</span>
-                  <span className="font-mono font-bold text-blue-900">{collectingRx.regNo}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">রেফারকারী ডাক্তার:</span>
-                  <span className="font-medium text-slate-800">{collectingRx.doctorName || 'Doctor'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">মোট বিল:</span>
-                  <span className="font-bold text-slate-900">
-                    ৳ {collectingRx.contract?.payableAmount || collectingRx.payment?.totalBill || 0}
-                  </span>
-                </div>
-              </div>
-
-              <form onSubmit={handleQuickCollectAndSendToDoctor} className="space-y-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    আজকের জমা টাকা (Paid Amount) <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-2.5 top-2 font-bold text-slate-400">৳</span>
+                    <label className="block font-bold text-emerald-800 mb-1">আজকের জমা (Paid - ৳) *</label>
                     <input
                       type="number"
+                      min="0"
                       required
-                      value={collectAmount || ''}
-                      onChange={(e) => setCollectAmount(Number(e.target.value))}
-                      className="w-full pl-7 pr-3 py-1.5 border-2 border-emerald-500 rounded font-bold text-emerald-950 text-sm text-right focus:outline-none focus:bg-white bg-emerald-50/30"
+                      value={directPaidAmount || ''}
+                      onChange={(e) => setDirectPaidAmount(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 border-2 border-emerald-500 rounded-lg font-mono font-black text-right text-emerald-950 bg-emerald-50/40"
                     />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-red-700 mb-1">বকেয়া (Due - ৳)</label>
+                    <div className="w-full px-2.5 py-1.5 border border-slate-200 bg-slate-100 rounded-lg font-mono font-bold text-right text-red-600">
+                      ৳ {Math.max(0, directTotalBill - directDiscount - directPaidAmount)}
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                {/* Payment Method & Trx */}
+                <div className="grid grid-cols-2 gap-2.5">
                   <div>
                     <label className="block font-semibold text-slate-600 mb-1">পেমেন্ট মেথড</label>
                     <select
-                      value={collectMethod}
-                      onChange={(e) => setCollectMethod(e.target.value)}
-                      className="w-full px-2 py-1.5 border border-slate-300 rounded bg-white"
+                      value={directMethod}
+                      onChange={(e) => setDirectMethod(e.target.value)}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
                     >
                       <option value="Cash">Cash (নগদ)</option>
                       <option value="bKash">bKash (বিকাশ)</option>
-                      <option value="Nagad">Nagad (নগদ অ্যাপ)</option>
+                      <option value="Nagad">Nagad (নগদ)</option>
                       <option value="Card">Card (কার্ড)</option>
                       <option value="Bank Transfer">Bank Transfer (ব্যাংক)</option>
                       <option value="Other">Other (অন্যান্য)</option>
@@ -1339,37 +1971,65 @@ export default function PaymentsPage() {
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-600 mb-1">রেফারেন্স / TrxID</label>
+                    <label className="block font-semibold text-slate-600 mb-1">নোট / TrxID</label>
                     <input
                       type="text"
-                      value={collectNote}
-                      onChange={(e) => setCollectNote(e.target.value)}
-                      placeholder="Receipt / TrxID..."
-                      className="w-full px-2 py-1.5 border border-slate-300 rounded bg-white"
+                      value={directNote}
+                      onChange={(e) => setDirectNote(e.target.value)}
+                      placeholder="Transaction Reference / Note..."
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
                     />
                   </div>
                 </div>
 
-                <div className="pt-2 flex justify-end space-x-2">
+                <div className="pt-2 flex justify-between items-center border-t border-slate-200">
                   <button
                     type="button"
-                    onClick={() => setCollectingRx(null)}
-                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold"
+                    onClick={() => setIsDirectModalOpen(false)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold shadow flex items-center gap-1.5 disabled:opacity-50"
+                    className={`px-5 py-2 text-white font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition ${
+                      directDept === 'physiotherapy'
+                        ? 'bg-teal-600 hover:bg-teal-700'
+                        : 'bg-blue-600 hover:bg-blue-700'
+                    }`}
                   >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>{isSubmitting ? 'Processing...' : 'Collect & Send to Doctor'}</span>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>{isSubmitting ? 'সংরক্ষণ হচ্ছে...' : 'জমা সংরক্ষণ ও মানি রসিদ প্রিন্ট'}</span>
                   </button>
                 </div>
               </form>
             </div>
           </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: MONEY RECEIPT PRINT MODAL (THERMAL 80MM / 58MM & A4) */}
+        {/* ========================================================================= */}
+        {selectedPaymentForReceipt && (
+          <PaymentReceiptModal
+            isOpen={true}
+            payment={selectedPaymentForReceipt}
+            clinicSettings={clinicSettings}
+            onClose={() => setSelectedPaymentForReceipt(null)}
+          />
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: EXPENSE VOUCHER PRINT MODAL (THERMAL 80MM / 58MM & A4) */}
+        {/* ========================================================================= */}
+        {selectedExpenseForVoucher && (
+          <ExpenseVoucherModal
+            isOpen={true}
+            expense={selectedExpenseForVoucher}
+            clinicSettings={clinicSettings}
+            onClose={() => setSelectedExpenseForVoucher(null)}
+          />
         )}
       </div>
     </div>

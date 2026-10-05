@@ -50,7 +50,9 @@ import {
   ClipboardList,
   BarChart3,
   PieChart,
-  FileCheck
+  FileCheck,
+  Building2,
+  Wallet
 } from 'lucide-react';
 import { 
   db, 
@@ -58,6 +60,7 @@ import {
   type Prescription, 
   type Appointment, 
   type PaymentRecord, 
+  type ExpenseRecord,
   type MaterialItem, 
   type Employee,
   type MarketingTask,
@@ -67,10 +70,11 @@ import {
 import { syncEngine } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
 import ThermalTokenModal from '@/components/appointments/ThermalTokenModal';
+import ExpenseVoucherModal from '@/components/payments/ExpenseVoucherModal';
 import { DentalLoadingSpinner } from '@/components/DentalLoadingSpinner';
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, activeDepartment, setDepartment } = useAuth();
   const [patientsCount, setPatientsCount] = useState<number>(0);
   const [prescriptionsCount, setPrescriptionsCount] = useState<number>(0);
   const [recentPrescriptions, setRecentPrescriptions] = useState<Prescription[]>([]);
@@ -136,6 +140,49 @@ export default function DashboardPage() {
     loadDashboardData();
   }, [todayStr]);
 
+  // 1. If user selected 'all' (All Clinic & Combined Accounts Overview)
+  if (activeDepartment === 'all') {
+    return (
+      <AllClinicOverviewDashboard
+        user={user}
+        clinicSettings={clinicSettings}
+        patientsCount={patientsCount}
+        prescriptionsCount={prescriptionsCount}
+        totalCollected={totalCollected}
+        todayCollected={todayCollected}
+        totalDues={totalDues}
+        employeesList={employeesList}
+        todayAppointments={todayAppointments}
+        recentPrescriptions={recentPrescriptions}
+        lowStockMaterials={lowStockMaterials}
+        paymentsList={paymentsList}
+        todayStr={todayStr}
+        setDepartment={setDepartment}
+      />
+    );
+  }
+
+  // 2. If user switched to Physiotherapy Mode, render Physiotherapy Dashboard
+  if (activeDepartment === 'physiotherapy') {
+    return (
+      <PhysiotherapyDashboard
+        user={user}
+        clinicSettings={clinicSettings}
+        patientsCount={patientsCount}
+        prescriptionsCount={prescriptionsCount}
+        totalCollected={totalCollected}
+        todayCollected={todayCollected}
+        totalDues={totalDues}
+        employeesList={employeesList}
+        todayAppointments={todayAppointments}
+        recentPrescriptions={recentPrescriptions}
+        lowStockMaterials={lowStockMaterials}
+        todayStr={todayStr}
+        setDepartment={setDepartment}
+      />
+    );
+  }
+
   const rawRole = (user?.role || 'doctor').toLowerCase();
 
   // Render role specific dashboard
@@ -191,6 +238,1759 @@ export default function DashboardPage() {
       lowStockMaterials={lowStockMaterials}
       todayStr={todayStr}
     />
+  );
+}
+
+/* =========================================================================
+   1.2 ALL CLINIC & COMPLETE A-TO-Z ACCOUNTS & FINANCIAL DASHBOARD
+   ========================================================================= */
+function AllClinicOverviewDashboard({
+  user,
+  clinicSettings,
+  patientsCount,
+  prescriptionsCount,
+  totalCollected,
+  todayCollected,
+  totalDues,
+  employeesList,
+  todayAppointments,
+  recentPrescriptions,
+  lowStockMaterials,
+  paymentsList,
+  todayStr,
+  setDepartment,
+}: any) {
+  // State for expenses
+  const [expensesList, setExpensesList] = useState<ExpenseRecord[]>([]);
+  const [activeTab, setActiveTab] = useState<'overview' | 'expenses' | 'income' | 'queue'>('overview');
+  const [selectedDeptFilter, setSelectedDeptFilter] = useState<'all' | 'dental' | 'physiotherapy'>('all');
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  
+  // Add Expense Modal state
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState<boolean>(false);
+  const [selectedExpenseForVoucher, setSelectedExpenseForVoucher] = useState<ExpenseRecord | null>(null);
+  const [expenseForm, setExpenseForm] = useState({
+    title: '',
+    amount: '',
+    category: 'ক্লিনিক সাধারণ খরচ (General Clinic)',
+    department: 'all' as 'all' | 'dental' | 'physiotherapy',
+    paymentMethod: 'Cash',
+    spentBy: user?.name || 'Admin',
+    voucherNo: `EXP-${Date.now().toString().slice(-6)}`,
+    note: '',
+    date: todayStr || new Date().toISOString().split('T')[0],
+  });
+
+  // Load expenses from IndexedDB
+  const loadExpenses = async () => {
+    try {
+      const exps = await db.expenses.toArray();
+      setExpensesList(exps.reverse());
+    } catch (e) {
+      console.warn('Failed to load expenses:', e);
+    }
+  };
+
+  useEffect(() => {
+    loadExpenses();
+  }, [todayStr]);
+
+  // Helper classification for payments
+  const isPhysioRecord = (p: any) => {
+    if (p.department === 'physiotherapy') return true;
+    if (p.department === 'dental') return false;
+    const txt = `${p.particulars || ''} ${p.note || ''}`.toLowerCase();
+    return (
+      txt.includes('physio') ||
+      txt.includes('ফিজিওথেরাপি') ||
+      txt.includes('therapy') ||
+      txt.includes('থেরাপি') ||
+      txt.includes('ust') ||
+      txt.includes('ift') ||
+      txt.includes('traction') ||
+      txt.includes('tens') ||
+      txt.includes('stroke') ||
+      txt.includes('rehab') ||
+      txt.includes('সেশন')
+    );
+  };
+
+  const isPhysioApnt = (ap: any) => {
+    if (ap.department === 'physiotherapy') return true;
+    const txt = `${ap.doctorName || ''} ${ap.problem || ''}`.toLowerCase();
+    return (
+      txt.includes('physio') ||
+      txt.includes('ফিজিওথেরাপি') ||
+      txt.includes('therapy') ||
+      txt.includes('থেরাপি') ||
+      txt.includes('প্যারালাইসিস') ||
+      txt.includes('স্ট্রোক') ||
+      txt.includes('কোমর') ||
+      txt.includes('ঘাড়')
+    );
+  };
+
+  // Payment calculations
+  const physioPayments = useMemo(() => (paymentsList || []).filter(isPhysioRecord), [paymentsList]);
+  const dentalPayments = useMemo(() => (paymentsList || []).filter((p: any) => !isPhysioRecord(p)), [paymentsList]);
+
+  const dentalPaidTotal = useMemo(() => dentalPayments.reduce((s: number, p: any) => s + (p.paidAmount || 0), 0), [dentalPayments]);
+  const physioPaidTotal = useMemo(() => physioPayments.reduce((s: number, p: any) => s + (p.paidAmount || 0), 0), [physioPayments]);
+  const dentalDueTotal = useMemo(() => dentalPayments.reduce((s: number, p: any) => s + (p.dueAmount || 0), 0), [dentalPayments]);
+  const physioDueTotal = useMemo(() => physioPayments.reduce((s: number, p: any) => s + (p.dueAmount || 0), 0), [physioPayments]);
+
+  const todayDentalPaid = useMemo(() => {
+    return dentalPayments
+      .filter((p: any) => (p.date === todayStr || (p.createdAt && p.createdAt.startsWith(todayStr))))
+      .reduce((s: number, p: any) => s + (p.paidAmount || 0), 0);
+  }, [dentalPayments, todayStr]);
+
+  const todayPhysioPaid = useMemo(() => {
+    return physioPayments
+      .filter((p: any) => (p.date === todayStr || (p.createdAt && p.createdAt.startsWith(todayStr))))
+      .reduce((s: number, p: any) => s + (p.paidAmount || 0), 0);
+  }, [physioPayments, todayStr]);
+
+  // Expense calculations
+  const totalExpenses = useMemo(() => expensesList.reduce((s, e) => s + (Number(e.amount) || 0), 0), [expensesList]);
+  const todayExpenses = useMemo(() => {
+    return expensesList
+      .filter((e) => e.date === todayStr || (e.createdAt && e.createdAt.startsWith(todayStr)))
+      .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  }, [expensesList, todayStr]);
+
+  const dentalExpenses = useMemo(() => {
+    return expensesList
+      .filter((e) => e.department === 'dental' || e.category.includes('ডেন্টাল'))
+      .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  }, [expensesList]);
+
+  const physioExpenses = useMemo(() => {
+    return expensesList
+      .filter((e) => e.department === 'physiotherapy' || e.category.includes('ফিজিও'))
+      .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  }, [expensesList]);
+
+  const generalExpenses = useMemo(() => {
+    return expensesList
+      .filter((e) => (!e.department || e.department === 'all') && !e.category.includes('ডেন্টাল') && !e.category.includes('ফিজিও'))
+      .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  }, [expensesList]);
+
+  // Net Company Profit
+  const netCompanyProfit = totalCollected - totalExpenses;
+  const todayNetCash = todayCollected - todayExpenses;
+  const dentalNetProfit = dentalPaidTotal - dentalExpenses;
+  const physioNetProfit = physioPaidTotal - physioExpenses;
+
+  // Filtered expenses list for table
+  const filteredExpenses = useMemo(() => {
+    return expensesList.filter((e) => {
+      if (selectedDeptFilter === 'dental' && e.department !== 'dental' && !e.category.includes('ডেন্টাল')) return false;
+      if (selectedDeptFilter === 'physiotherapy' && e.department !== 'physiotherapy' && !e.category.includes('ফিজিও')) return false;
+      if (searchTerm) {
+        const q = searchTerm.toLowerCase();
+        return (
+          e.title?.toLowerCase().includes(q) ||
+          e.category?.toLowerCase().includes(q) ||
+          e.voucherNo?.toLowerCase().includes(q) ||
+          e.spentBy?.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [expensesList, selectedDeptFilter, searchTerm]);
+
+  // Filtered income list for table
+  const filteredIncome = useMemo(() => {
+    return (paymentsList || []).filter((p: any) => {
+      const isPh = isPhysioRecord(p);
+      if (selectedDeptFilter === 'dental' && isPh) return false;
+      if (selectedDeptFilter === 'physiotherapy' && !isPh) return false;
+      if (searchTerm) {
+        const q = searchTerm.toLowerCase();
+        return (
+          p.name?.toLowerCase().includes(q) ||
+          p.mobile?.includes(q) ||
+          p.particulars?.toLowerCase().includes(q) ||
+          p.regNo?.toString().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [paymentsList, selectedDeptFilter, searchTerm]);
+
+  // Filtered appointments queue
+  const filteredQueue = useMemo(() => {
+    return todayAppointments.filter((ap: any) => {
+      if (selectedDeptFilter === 'dental' && isPhysioApnt(ap)) return false;
+      if (selectedDeptFilter === 'physiotherapy' && !isPhysioApnt(ap)) return false;
+      return true;
+    });
+  }, [todayAppointments, selectedDeptFilter]);
+
+  // Handle Save New Expense
+  const handleSaveExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!expenseForm.title || !expenseForm.amount || Number(expenseForm.amount) <= 0) {
+      alert('দয়া করে খরচের সঠিক বিবরণ ও টাকার পরিমাণ লিখুন।');
+      return;
+    }
+
+    try {
+      const newExpense: ExpenseRecord = {
+        id: `exp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        date: expenseForm.date,
+        category: expenseForm.category,
+        department: expenseForm.department,
+        title: expenseForm.title.trim(),
+        amount: Number(expenseForm.amount),
+        paymentMethod: expenseForm.paymentMethod,
+        spentBy: expenseForm.spentBy.trim(),
+        voucherNo: expenseForm.voucherNo.trim(),
+        note: expenseForm.note.trim(),
+        createdAt: new Date().toISOString(),
+      };
+
+      await db.expenses.add(newExpense);
+      syncEngine.logMutation('expenses', 'INSERT', newExpense.id, newExpense);
+
+      // Reset form
+      setExpenseForm({
+        title: '',
+        amount: '',
+        category: 'ক্লিনিক সাধারণ খরচ (General Clinic)',
+        department: 'all',
+        paymentMethod: 'Cash',
+        spentBy: user?.name || 'Admin',
+        voucherNo: `EXP-${Date.now().toString().slice(-6)}`,
+        note: '',
+        date: todayStr || new Date().toISOString().split('T')[0],
+      });
+
+      setIsExpenseModalOpen(false);
+      await loadExpenses();
+      setSelectedExpenseForVoucher(newExpense);
+    } catch (err) {
+      console.error('Failed to add expense:', err);
+      alert('খরচ এন্ট্রি করতে সমস্যা হয়েছে!');
+    }
+  };
+
+  // Handle Delete Expense
+  const handleDeleteExpense = async (id: string) => {
+    if (!confirm('আপনি কি নিশ্চিত এই খরচটি মুছে ফেলতে চান?')) return;
+    try {
+      await db.expenses.delete(id);
+      syncEngine.logMutation('expenses', 'DELETE', id, {});
+      loadExpenses();
+    } catch (err) {
+      console.error('Failed to delete expense:', err);
+    }
+  };
+
+  return (
+    <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto animate-in fade-in duration-300">
+      {/* 1. TOP HERO HEADER WITH 3-WAY DEPARTMENT SWITCHER */}
+      <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 rounded-2xl p-5 text-white shadow-xl border border-indigo-900/40">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center space-x-3.5">
+            <div className="w-14 h-14 bg-gradient-to-tr from-indigo-500 via-purple-500 to-blue-500 rounded-2xl flex items-center justify-center text-2xl shadow-lg border border-indigo-300/40 text-white">
+              🏥
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h1 className="text-xl sm:text-2xl font-black font-sans tracking-tight text-white">
+                  {clinicSettings?.clinicName || 'ইফরা ডেন্টাল ও ফিজিওথেরাপি সেন্টার'}
+                </h1>
+                <span className="bg-gradient-to-r from-purple-500 to-indigo-500 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-xs uppercase">
+                  <Building2 className="w-3 h-3" />
+                  <span>সার্বিক কোম্পানি ও অল অ্যাকাউন্টস</span>
+                </span>
+              </div>
+              <p className="text-xs text-indigo-200/90 mt-0.5">
+                স্বাগতম, <span className="font-semibold text-white">{user?.name || 'Administrator'}</span> | ডেন্টাল ও ফিজিওথেরাপি সেন্টারের সার্বিক আয়, খরচ ও হিসাব-নিকাশ
+              </p>
+            </div>
+          </div>
+
+          {/* Mode Switcher Buttons */}
+          <div className="flex flex-wrap items-center gap-1.5 bg-slate-900/90 p-1.5 rounded-xl border border-indigo-800/60 shadow-inner">
+            <button
+              type="button"
+              onClick={() => setDepartment('all')}
+              className="px-3.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5"
+            >
+              <span>🏥 সার্বিক (All Accounts)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDepartment('dental')}
+              className="px-3.5 py-1.5 text-blue-300 hover:text-white hover:bg-slate-800 font-bold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>🦷 ডেন্টাল বিভাগ</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDepartment('physiotherapy')}
+              className="px-3.5 py-1.5 text-emerald-300 hover:text-white hover:bg-slate-800 font-bold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <span className="text-amber-400">⚡</span>
+              <span>ফিজিওথেরাপি বিভাগ</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Quick Direct Action Bar */}
+        <div className="mt-4 pt-3.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsExpenseModalOpen(true)}
+              className="px-3.5 py-1.5 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ নতুন খরচ এন্ট্রি (Add Expense)</span>
+            </button>
+
+            <Link
+              href="/payments"
+              className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition"
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              <span>+ পেমেন্ট ও রসিদ আদায় (Income)</span>
+            </Link>
+
+            <Link
+              href="/prescription"
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition"
+            >
+              <span>🦷 ডেন্টাল প্রেসক্রিপশন</span>
+            </Link>
+
+            <Link
+              href="/patients"
+              className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition"
+            >
+              <span>⚡ ফিজিওথেরাপি সেশন</span>
+            </Link>
+          </div>
+
+          <div className="text-indigo-300/90 text-[11px] font-medium flex items-center gap-1">
+            <Clock className="w-3.5 h-3.5 text-indigo-400" />
+            <span>আজকের তারিখ: <strong>{new Date().toLocaleDateString('bn-BD', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</strong></span>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. FULL COMPANY A-TO-Z FINANCIAL KPIS (আয়, খরচ, নিট লাভ ও বকেয়া) */}
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {/* 1. Total Income / Collection */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs hover:border-emerald-400 transition flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-black uppercase text-slate-500 tracking-wider">
+              সর্বমোট আদায় (Total Revenue)
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm">
+              💰
+            </div>
+          </div>
+          <div className="my-2">
+            <div className="text-2xl sm:text-3xl font-black font-mono text-emerald-950">
+              ৳ {totalCollected.toLocaleString()}
+            </div>
+            <span className="text-[11px] text-emerald-700 font-bold block mt-0.5">
+              আজকের আদায়: ৳{todayCollected.toLocaleString()}
+            </span>
+          </div>
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
+            <span className="text-blue-700">🦷 ডেন্টাল: ৳{dentalPaidTotal.toLocaleString()}</span>
+            <span className="text-teal-700">⚡ ফিজিও: ৳{physioPaidTotal.toLocaleString()}</span>
+          </div>
+        </div>
+
+        {/* 2. Total Expenses / সর্বমোট ব্যয় */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs hover:border-rose-400 transition flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-black uppercase text-slate-500 tracking-wider">
+              সর্বমোট খরচ (Total Expenses)
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold text-sm">
+              💸
+            </div>
+          </div>
+          <div className="my-2">
+            <div className="text-2xl sm:text-3xl font-black font-mono text-rose-950">
+              ৳ {totalExpenses.toLocaleString()}
+            </div>
+            <span className="text-[11px] text-rose-600 font-bold block mt-0.5">
+              আজকের খরচ: ৳{todayExpenses.toLocaleString()}
+            </span>
+          </div>
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
+            <span className="text-blue-700">🦷 ডেন্টাল: ৳{dentalExpenses.toLocaleString()}</span>
+            <span className="text-teal-700">⚡ ফিজিও: ৳{physioExpenses.toLocaleString()}</span>
+          </div>
+        </div>
+
+        {/* 3. Company Net Profit / নিট প্রফিট */}
+        <div className={`p-4 rounded-2xl border shadow-xs transition flex flex-col justify-between ${
+          netCompanyProfit >= 0
+            ? 'bg-gradient-to-br from-white via-indigo-50/40 to-emerald-50/50 border-emerald-300'
+            : 'bg-rose-50/50 border-rose-300'
+        }`}>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-black uppercase text-slate-600 tracking-wider">
+              নিট কোম্পানি লাভ (Net Profit)
+            </span>
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-sm ${
+              netCompanyProfit >= 0 ? 'bg-indigo-100 text-indigo-700' : 'bg-rose-100 text-rose-700'
+            }`}>
+              📈
+            </div>
+          </div>
+          <div className="my-2">
+            <div className={`text-2xl sm:text-3xl font-black font-mono ${
+              netCompanyProfit >= 0 ? 'text-indigo-950' : 'text-rose-900'
+            }`}>
+              ৳ {netCompanyProfit.toLocaleString()}
+            </div>
+            <span className={`text-[11px] font-bold block mt-0.5 ${
+              todayNetCash >= 0 ? 'text-emerald-700' : 'text-rose-600'
+            }`}>
+              আজকের নিট ক্যাশ: ৳{todayNetCash.toLocaleString()}
+            </span>
+          </div>
+          <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[10px] font-bold text-slate-600">
+            <span>লাভের হার: {totalCollected > 0 ? ((netCompanyProfit / totalCollected) * 100).toFixed(1) : 0}%</span>
+            <span className="text-indigo-700">{netCompanyProfit >= 0 ? '✓ প্রফিট প্লাস' : '⚠ ঘাটতি'}</span>
+          </div>
+        </div>
+
+        {/* 4. Total Dues / সর্বমোট বকেয়া */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs hover:border-amber-400 transition flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-black uppercase text-slate-500 tracking-wider">
+              সর্বমোট বকেয়া (Total Dues)
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-sm">
+              ⏳
+            </div>
+          </div>
+          <div className="my-2">
+            <div className="text-2xl sm:text-3xl font-black font-mono text-amber-950">
+              ৳ {totalDues.toLocaleString()}
+            </div>
+            <span className="text-[11px] text-amber-700 font-bold block mt-0.5">
+              রোগীদের কাছে বকেয়া বাকি
+            </span>
+          </div>
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
+            <span className="text-blue-700">🦷 ডেন্টাল: ৳{dentalDueTotal.toLocaleString()}</span>
+            <span className="text-teal-700">⚡ ফিজিও: ৳{physioDueTotal.toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. THREE-WAY DEEP DEPARTMENTAL ACCOUNTS PANELS (DENTAL vs PHYSIO vs CENTRAL OVERHEAD) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* PANEL 1: DENTAL ACCOUNTS */}
+        <div className="bg-white rounded-2xl border-2 border-blue-200 p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-3">
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-blue-100">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center text-base font-bold shadow-md">
+                  🦷
+                </div>
+                <div>
+                  <h2 className="text-sm font-black text-blue-950">ডেন্টাল বিভাগ হিসাব</h2>
+                  <p className="text-[10px] text-slate-500">ডেন্টাল সার্জারি, রুট ক্যানেল ও ওপিডি</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDepartment('dental')}
+                className="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-300 font-bold text-[11px] rounded-lg transition"
+              >
+                ডেন্টাল ভিউ &rarr;
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 my-3 text-xs">
+              <div className="bg-blue-50/80 p-2.5 rounded-xl border border-blue-100">
+                <span className="text-[10px] text-blue-700 font-bold block uppercase">মোট আদায়</span>
+                <span className="text-base font-black font-mono text-blue-950">৳ {dentalPaidTotal.toLocaleString()}</span>
+              </div>
+              <div className="bg-blue-50/80 p-2.5 rounded-xl border border-blue-100">
+                <span className="text-[10px] text-blue-700 font-bold block uppercase">আজকের আদায়</span>
+                <span className="text-base font-black font-mono text-blue-950">৳ {todayDentalPaid.toLocaleString()}</span>
+              </div>
+              <div className="bg-rose-50/80 p-2.5 rounded-xl border border-rose-100">
+                <span className="text-[10px] text-rose-700 font-bold block uppercase">ডেন্টাল খরচ ও ম্যাটেরিয়াল</span>
+                <span className="text-base font-black font-mono text-rose-950">৳ {dentalExpenses.toLocaleString()}</span>
+              </div>
+              <div className="bg-emerald-50/80 p-2.5 rounded-xl border border-emerald-100">
+                <span className="text-[10px] text-emerald-700 font-bold block uppercase">ডেন্টাল নিট লাভ</span>
+                <span className="text-base font-black font-mono text-emerald-950">৳ {dentalNetProfit.toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div className="p-2 bg-slate-50 rounded-xl border border-slate-200 text-[11px] flex items-center justify-between text-slate-600">
+              <span>ডেন্টাল বকেয়া: <strong className="text-amber-700">৳{dentalDueTotal.toLocaleString()}</strong></span>
+              <span>মোট প্রেসক্রিপশন: <strong className="text-blue-900">{prescriptionsCount} টি</strong></span>
+            </div>
+          </div>
+
+          <div className="pt-2 flex items-center gap-2">
+            <Link
+              href="/prescription"
+              className="flex-1 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow text-center transition"
+            >
+              + ডেন্টাল প্রেসক্রিপশন
+            </Link>
+            <Link
+              href="/materials"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition"
+            >
+              ম্যাটেরিয়াল স্টক
+            </Link>
+          </div>
+        </div>
+
+        {/* PANEL 2: PHYSIOTHERAPY ACCOUNTS */}
+        <div className="bg-white rounded-2xl border-2 border-teal-200 p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-3">
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-teal-100">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-teal-600 to-emerald-600 text-white flex items-center justify-center text-base font-bold shadow-md">
+                  ⚡
+                </div>
+                <div>
+                  <h2 className="text-sm font-black text-teal-950">ফিজিওথেরাপি বিভাগ হিসাব</h2>
+                  <p className="text-[10px] text-slate-500">ইলেক্ট্রোথেরাপি, ট্র্যাকশন ও রিহ্যাব</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDepartment('physiotherapy')}
+                className="px-2 py-1 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-300 font-bold text-[11px] rounded-lg transition"
+              >
+                ফিজিও ভিউ &rarr;
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 my-3 text-xs">
+              <div className="bg-teal-50/80 p-2.5 rounded-xl border border-teal-100">
+                <span className="text-[10px] text-teal-700 font-bold block uppercase">মোট আদায়</span>
+                <span className="text-base font-black font-mono text-teal-950">৳ {physioPaidTotal.toLocaleString()}</span>
+              </div>
+              <div className="bg-teal-50/80 p-2.5 rounded-xl border border-teal-100">
+                <span className="text-[10px] text-teal-700 font-bold block uppercase">আজকের আদায়</span>
+                <span className="text-base font-black font-mono text-teal-950">৳ {todayPhysioPaid.toLocaleString()}</span>
+              </div>
+              <div className="bg-rose-50/80 p-2.5 rounded-xl border border-rose-100">
+                <span className="text-[10px] text-rose-700 font-bold block uppercase">ফিজিও খরচ ও ইকুইপমেন্ট</span>
+                <span className="text-base font-black font-mono text-rose-950">৳ {physioExpenses.toLocaleString()}</span>
+              </div>
+              <div className="bg-emerald-50/80 p-2.5 rounded-xl border border-emerald-100">
+                <span className="text-[10px] text-emerald-700 font-bold block uppercase">ফিজিও নিট লাভ</span>
+                <span className="text-base font-black font-mono text-emerald-950">৳ {physioNetProfit.toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div className="p-2 bg-slate-50 rounded-xl border border-slate-200 text-[11px] flex items-center justify-between text-slate-600">
+              <span>ফিজিও বকেয়া: <strong className="text-amber-700">৳{physioDueTotal.toLocaleString()}</strong></span>
+              <span>এক্টিভ মডালিটি: <strong className="text-teal-900">৩ টি ইউনিট</strong></span>
+            </div>
+          </div>
+
+          <div className="pt-2 flex items-center gap-2">
+            <Link
+              href="/patients"
+              className="flex-1 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow text-center transition"
+            >
+              + নতুন থেরাপি সেশন
+            </Link>
+            <Link
+              href="/payments"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition"
+            >
+              ফিজিও লেজার
+            </Link>
+          </div>
+        </div>
+
+        {/* PANEL 3: CENTRAL CLINIC OVERHEAD & OPERATIONAL EXPENSES */}
+        <div className="bg-white rounded-2xl border-2 border-indigo-200 p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-3">
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-indigo-100">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center text-base font-bold shadow-md">
+                  🏢
+                </div>
+                <div>
+                  <h2 className="text-sm font-black text-indigo-950">ক্লিনিক অপারেশন ও সাধারণ ব্যয়</h2>
+                  <p className="text-[10px] text-slate-500">বেতন, ক্লিনিক ভাড়া, বিদ্যুৎ ও মার্কেটিং</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setExpenseForm(prev => ({ ...prev, department: 'all' }));
+                  setIsExpenseModalOpen(true);
+                }}
+                className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-300 font-bold text-[11px] rounded-lg transition"
+              >
+                + খরচ যোগ &rarr;
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 my-3 text-xs">
+              <div className="bg-indigo-50/80 p-2.5 rounded-xl border border-indigo-100">
+                <span className="text-[10px] text-indigo-700 font-bold block uppercase">সাধারণ পরিচালনা খরচ</span>
+                <span className="text-base font-black font-mono text-indigo-950">৳ {generalExpenses.toLocaleString()}</span>
+              </div>
+              <div className="bg-indigo-50/80 p-2.5 rounded-xl border border-indigo-100">
+                <span className="text-[10px] text-indigo-700 font-bold block uppercase">স্টাফ কর্মী সংখ্যা</span>
+                <span className="text-base font-black font-mono text-indigo-950">{employeesList.length} জন</span>
+              </div>
+              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 col-span-2">
+                <div className="flex items-center justify-between text-[11px] text-slate-600 mb-1">
+                  <span>মোট রেজিস্টার্ড রোগী:</span>
+                  <span className="font-bold text-slate-900">{patientsCount} জন</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-slate-600">
+                  <span>আজকের অ্যাপয়েন্টমেন্ট/সেশন:</span>
+                  <span className="font-bold text-slate-900">{todayAppointments.length} জন</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-2 bg-indigo-50/50 rounded-xl border border-indigo-100 text-[11px] text-indigo-900 font-medium">
+              💡 ক্লিনিকের যেকোনো নিয়মিত খরচ (ভাড়া, বিল, বেতন) এন্ট্রি করতে "+ নতুন খরচ এন্ট্রি" ব্যবহার করুন।
+            </div>
+          </div>
+
+          <div className="pt-2 flex items-center gap-2">
+            <Link
+              href="/employees"
+              className="flex-1 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow text-center transition"
+            >
+              কর্মী ও বেতন ব্যবস্থাপনা
+            </Link>
+            <Link
+              href="/marketing-officer"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition"
+            >
+              মার্কেটিং
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. TABBED AUDIT LEDGER (EXPENSES, INCOME, QUEUE & CATEGORIES) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs space-y-4">
+        {/* Navigation Tabs and Filters */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveTab('overview')}
+              className={`px-3 py-1.5 font-bold text-xs rounded-lg transition flex items-center gap-1.5 ${
+                activeTab === 'overview'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>সার্বিক লাভ-ক্ষতি ও ক্যাটাগরি রিপোর্ট</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('expenses')}
+              className={`px-3 py-1.5 font-bold text-xs rounded-lg transition flex items-center gap-1.5 ${
+                activeTab === 'expenses'
+                  ? 'bg-rose-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>ক্লিনিক খরচের লেজার ({expensesList.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('income')}
+              className={`px-3 py-1.5 font-bold text-xs rounded-lg transition flex items-center gap-1.5 ${
+                activeTab === 'income'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              <span>আদায় ও পেমেন্ট লেজার ({paymentsList.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('queue')}
+              className={`px-3 py-1.5 font-bold text-xs rounded-lg transition flex items-center gap-1.5 ${
+                activeTab === 'queue'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>আজকের শিডিউল কিউ ({todayAppointments.length})</span>
+            </button>
+          </div>
+
+          {/* Department Filter & Search */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs">
+              <button
+                type="button"
+                onClick={() => setSelectedDeptFilter('all')}
+                className={`px-2.5 py-1 rounded-md font-bold transition ${selectedDeptFilter === 'all' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'}`}
+              >
+                🏥 সকল
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedDeptFilter('dental')}
+                className={`px-2.5 py-1 rounded-md font-bold transition ${selectedDeptFilter === 'dental' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600'}`}
+              >
+                🦷 ডেন্টাল
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedDeptFilter('physiotherapy')}
+                className={`px-2.5 py-1 rounded-md font-bold transition ${selectedDeptFilter === 'physiotherapy' ? 'bg-teal-600 text-white shadow-xs' : 'text-slate-600'}`}
+              >
+                ⚡ ফিজিও
+              </button>
+            </div>
+
+            {activeTab !== 'overview' && (
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="খুঁজুন..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-8 pr-3 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs w-36 sm:w-48 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* TAB 1: OVERVIEW & PROFIT-LOSS BREAKDOWN */}
+        {activeTab === 'overview' && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Income Distribution Card */}
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <TrendingUp className="w-4 h-4 text-emerald-600" />
+                    <span>রাজস্ব ও আয়ের উৎস বিশ্লেষণ (Revenue Breakdown)</span>
+                  </h4>
+                  <span className="font-mono font-bold text-emerald-800 text-xs">মোট ৳{totalCollected.toLocaleString()}</span>
+                </div>
+
+                <div className="space-y-2 text-xs">
+                  <div>
+                    <div className="flex justify-between font-bold text-slate-700 mb-1">
+                      <span>🦷 ডেন্টাল বিভাগ কালেকশন</span>
+                      <span>৳{dentalPaidTotal.toLocaleString()} ({totalCollected > 0 ? ((dentalPaidTotal / totalCollected) * 100).toFixed(1) : 0}%)</span>
+                    </div>
+                    <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-500"
+                        style={{ width: `${totalCollected > 0 ? (dentalPaidTotal / totalCollected) * 100 : 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between font-bold text-slate-700 mb-1">
+                      <span>⚡ ফিজিওথেরাপি বিভাগ কালেকশন</span>
+                      <span>৳{physioPaidTotal.toLocaleString()} ({totalCollected > 0 ? ((physioPaidTotal / totalCollected) * 100).toFixed(1) : 0}%)</span>
+                    </div>
+                    <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-teal-600 h-2 rounded-full transition-all duration-500"
+                        style={{ width: `${totalCollected > 0 ? (physioPaidTotal / totalCollected) * 100 : 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Expense Distribution Card */}
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <TrendingDown className="w-4 h-4 text-rose-600" />
+                    <span>ব্যয় ও খরচের খাত বিশ্লেষণ (Expense Breakdown)</span>
+                  </h4>
+                  <span className="font-mono font-bold text-rose-800 text-xs">মোট ৳{totalExpenses.toLocaleString()}</span>
+                </div>
+
+                <div className="space-y-2 text-xs">
+                  <div>
+                    <div className="flex justify-between font-bold text-slate-700 mb-1">
+                      <span>🦷 ডেন্টাল সামগ্রী ও ল্যাব খরচ</span>
+                      <span>৳{dentalExpenses.toLocaleString()} ({totalExpenses > 0 ? ((dentalExpenses / totalExpenses) * 100).toFixed(1) : 0}%)</span>
+                    </div>
+                    <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-blue-500 h-2 rounded-full transition-all duration-500"
+                        style={{ width: `${totalExpenses > 0 ? (dentalExpenses / totalExpenses) * 100 : 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between font-bold text-slate-700 mb-1">
+                      <span>⚡ ফিজিও সরঞ্জাম ও রক্ষণাবেক্ষণ</span>
+                      <span>৳{physioExpenses.toLocaleString()} ({totalExpenses > 0 ? ((physioExpenses / totalExpenses) * 100).toFixed(1) : 0}%)</span>
+                    </div>
+                    <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-teal-500 h-2 rounded-full transition-all duration-500"
+                        style={{ width: `${totalExpenses > 0 ? (physioExpenses / totalExpenses) * 100 : 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between font-bold text-slate-700 mb-1">
+                      <span>🏢 ক্লিনিক সাধারণ ও অপারেশনাল ব্যয়</span>
+                      <span>৳{generalExpenses.toLocaleString()} ({totalExpenses > 0 ? ((generalExpenses / totalExpenses) * 100).toFixed(1) : 0}%)</span>
+                    </div>
+                    <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-indigo-500 h-2 rounded-full transition-all duration-500"
+                        style={{ width: `${totalExpenses > 0 ? (generalExpenses / totalExpenses) * 100 : 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick action button to add expense */}
+            <div className="p-3 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-xl border border-indigo-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold">
+                  📝
+                </span>
+                <div>
+                  <h5 className="font-bold text-indigo-950">নিয়মিত খরচের হিসাব সংরক্ষণ করুন</h5>
+                  <p className="text-[11px] text-slate-500">ভাউচার নং ও ক্যাটাগরি ভিত্তিক খরচের ভাউচার সহজে তৈরি ও প্রিন্ট করুন</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExpenseModalOpen(true)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ নতুন খরচ যুক্ত করুন</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: EXPENSES LEDGER TABLE */}
+        {activeTab === 'expenses' && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-700">
+                সকল খরচ তালিকাভুক্ত রেকর্ড ({filteredExpenses.length} টি)
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsExpenseModalOpen(true)}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1 transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ নতুন খরচ এন্ট্রি</span>
+              </button>
+            </div>
+
+            {filteredExpenses.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2">
+                <p>কোনো খরচের হিসাব পাওয়া যায়নি।</p>
+                <button
+                  type="button"
+                  onClick={() => setIsExpenseModalOpen(true)}
+                  className="px-3 py-1.5 bg-indigo-600 text-white font-bold rounded-lg text-xs"
+                >
+                  + প্রথম খরচ এন্ট্রি করুন
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-xs text-xs">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="p-2.5 w-12 text-center">ক্রমিক</th>
+                      <th className="p-2.5 w-24">তারিখ</th>
+                      <th className="p-2.5 w-24">ভাউচার নং</th>
+                      <th className="p-2.5 w-24 text-center">বিভাগ</th>
+                      <th className="p-2.5">ক্যাটাগরি ও বিবরণ</th>
+                      <th className="p-2.5 w-24">খরচকারী</th>
+                      <th className="p-2.5 w-24 text-center">মেথড</th>
+                      <th className="p-2.5 w-28 text-right">পরিমাণ (টাকা)</th>
+                      <th className="p-2.5 w-24 text-center">ভাউচার</th>
+                      <th className="p-2.5 w-14 text-center">মুছুন</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredExpenses.map((exp, idx) => (
+                      <tr key={exp.id} className="hover:bg-slate-50/70 transition">
+                        <td className="p-2.5 text-center font-mono font-bold text-slate-500">{idx + 1}</td>
+                        <td className="p-2.5 font-mono text-slate-600">{exp.date}</td>
+                        <td className="p-2.5 font-mono font-bold text-indigo-700">{exp.voucherNo || '-'}</td>
+                        <td className="p-2.5 text-center">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            exp.department === 'physiotherapy'
+                              ? 'bg-teal-100 text-teal-800'
+                              : exp.department === 'dental'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-indigo-100 text-indigo-800'
+                          }`}>
+                            {exp.department === 'physiotherapy' ? '⚡ ফিজিও' : exp.department === 'dental' ? '🦷 ডেন্টাল' : '🏥 সার্বিক'}
+                          </span>
+                        </td>
+                        <td className="p-2.5">
+                          <div className="font-bold text-slate-900">{exp.title}</div>
+                          <div className="text-[10px] text-slate-500">{exp.category} {exp.note ? `• ${exp.note}` : ''}</div>
+                        </td>
+                        <td className="p-2.5 text-slate-600">{exp.spentBy || 'Admin'}</td>
+                        <td className="p-2.5 text-center font-mono text-[10px] font-bold text-slate-600">
+                          {exp.paymentMethod || 'Cash'}
+                        </td>
+                        <td className="p-2.5 text-right font-mono font-black text-rose-700">
+                          ৳ {exp.amount?.toLocaleString()}
+                        </td>
+                        <td className="p-2.5 text-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedExpenseForVoucher(exp)}
+                            className="px-2 py-0.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded font-bold text-[10.5px] inline-flex items-center gap-1 transition cursor-pointer shadow-2xs"
+                          >
+                            <Printer className="w-3 h-3 text-rose-600" />
+                            <span>ভাউচার</span>
+                          </button>
+                        </td>
+                        <td className="p-2.5 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteExpense(exp.id)}
+                            className="p-1 hover:bg-rose-100 text-rose-600 rounded transition cursor-pointer"
+                            title="মুছে ফেলুন"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-slate-50 font-bold border-t border-slate-200">
+                    <tr>
+                      <td colSpan={7} className="p-2.5 text-right text-slate-700">সর্বমোট খরচ:</td>
+                      <td className="p-2.5 text-right font-mono font-black text-rose-700">
+                        ৳ {filteredExpenses.reduce((s, e) => s + (e.amount || 0), 0).toLocaleString()}
+                      </td>
+                      <td colSpan={2}></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: INCOME & PAYMENT RECEIPTS TABLE */}
+        {activeTab === 'income' && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-700">
+                সকল পেমেন্ট ও আদায় রসিদ ({filteredIncome.length} টি)
+              </span>
+              <Link
+                href="/payments"
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1 transition"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ পেমেন্ট আদায় লেজার</span>
+              </Link>
+            </div>
+
+            {filteredIncome.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+                কোনো আয়ের রেকর্ড পাওয়া যায়নি।
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-xs text-xs">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="p-2.5 w-12 text-center">ক্রমিক</th>
+                      <th className="p-2.5 w-24">তারিখ</th>
+                      <th className="p-2.5 w-24 text-center">বিভাগ</th>
+                      <th className="p-2.5">রোগীর নাম ও রেজি নং</th>
+                      <th className="p-2.5">চিকিৎসা / সার্ভিস</th>
+                      <th className="p-2.5 w-24 text-right">মোট বিল</th>
+                      <th className="p-2.5 w-24 text-right">আদায়</th>
+                      <th className="p-2.5 w-24 text-right">বকেয়া</th>
+                      <th className="p-2.5 w-20 text-center">মেথড</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredIncome.slice(0, 30).map((p: any, idx: number) => {
+                      const isPh = isPhysioRecord(p);
+                      return (
+                        <tr key={p.id || idx} className="hover:bg-slate-50/70 transition">
+                          <td className="p-2.5 text-center font-mono font-bold text-slate-500">{idx + 1}</td>
+                          <td className="p-2.5 font-mono text-slate-600">{p.date || p.createdAt?.slice(0, 10)}</td>
+                          <td className="p-2.5 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              isPh ? 'bg-teal-100 text-teal-800' : 'bg-blue-100 text-blue-800'
+                            }`}>
+                              {isPh ? '⚡ ফিজিও' : '🦷 ডেন্টাল'}
+                            </span>
+                          </td>
+                          <td className="p-2.5">
+                            <div className="font-bold text-slate-900">{p.name}</div>
+                            <div className="text-[10px] font-mono text-slate-500">#{p.regNo} {p.mobile ? `• ${p.mobile}` : ''}</div>
+                          </td>
+                          <td className="p-2.5 text-slate-700">{p.particulars || 'চিকিৎসা ফি'}</td>
+                          <td className="p-2.5 text-right font-mono font-bold text-slate-800">৳{p.payableAmount || p.totalBill || 0}</td>
+                          <td className="p-2.5 text-right font-mono font-black text-emerald-700">৳{p.paidAmount || 0}</td>
+                          <td className="p-2.5 text-right font-mono font-bold text-amber-700">৳{p.dueAmount || 0}</td>
+                          <td className="p-2.5 text-center font-mono text-[10px] text-slate-600">{p.method || 'Cash'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="bg-slate-50 font-bold border-t border-slate-200">
+                    <tr>
+                      <td colSpan={6} className="p-2.5 text-right text-slate-700">সর্বমোট আদায়:</td>
+                      <td className="p-2.5 text-right font-mono font-black text-emerald-700">
+                        ৳ {filteredIncome.reduce((s: number, p: any) => s + (p.paidAmount || 0), 0).toLocaleString()}
+                      </td>
+                      <td className="p-2.5 text-right font-mono font-black text-amber-700">
+                        ৳ {filteredIncome.reduce((s: number, p: any) => s + (p.dueAmount || 0), 0).toLocaleString()}
+                      </td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: SCHEDULE QUEUE TABLE */}
+        {activeTab === 'queue' && (
+          <div className="space-y-3">
+            <span className="text-xs font-bold text-slate-700 block">
+              আজকের শিডিউলভুক্ত রোগী তালিকা ({filteredQueue.length} জন)
+            </span>
+
+            {filteredQueue.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+                আজকের জন্য কোনো অ্যাপয়েন্টমেন্ট বা সেশন তালিকাভুক্ত নেই।
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-xs text-xs">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="p-2.5 w-12 text-center">ক্রমিক</th>
+                      <th className="p-2.5 w-24 text-center">বিভাগ</th>
+                      <th className="p-2.5">রোগীর নাম</th>
+                      <th className="p-2.5 w-28">মোবাইল</th>
+                      <th className="p-2.5">সমস্যা / সার্ভিস</th>
+                      <th className="p-2.5 w-24">সময়</th>
+                      <th className="p-2.5 w-24 text-center">স্ট্যাটাস</th>
+                      <th className="p-2.5 w-28 text-center">অ্যাকশন</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredQueue.map((ap: any, idx: number) => {
+                      const isPhysio = isPhysioApnt(ap);
+                      return (
+                        <tr key={ap.id || idx} className="hover:bg-slate-50/60 transition">
+                          <td className="p-2.5 text-center font-mono font-bold text-slate-500">{idx + 1}</td>
+                          <td className="p-2.5 text-center whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              isPhysio ? 'bg-teal-100 text-teal-800' : 'bg-blue-100 text-blue-800'
+                            }`}>
+                              {isPhysio ? '⚡ ফিজিওথেরাপি' : '🦷 ডেন্টাল'}
+                            </span>
+                          </td>
+                          <td className="p-2.5 font-bold text-slate-900">{ap.name || ap.patientName}</td>
+                          <td className="p-2.5 font-mono text-slate-600">{ap.mobile || '-'}</td>
+                          <td className="p-2.5 text-slate-700">{ap.problem || (isPhysio ? 'Physiotherapy Session' : 'Dental Consultation')}</td>
+                          <td className="p-2.5 text-slate-600 font-mono">{ap.time || '10:00 AM'}</td>
+                          <td className="p-2.5 text-center">
+                            <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">
+                              {ap.status || 'Scheduled'}
+                            </span>
+                          </td>
+                          <td className="p-2.5 text-center whitespace-nowrap">
+                            <Link
+                              href={isPhysio ? `/patients` : `/prescription?regNo=${ap.regNo || ''}`}
+                              className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded text-[11px] border border-indigo-200 transition"
+                            >
+                              শুরু করুন &rarr;
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 5. ADD EXPENSE MODAL (ক্লিনিকের নতুন খরচ এন্ট্রি ফর্ম) */}
+      {isExpenseModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 bg-gradient-to-r from-rose-600 to-red-600 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center font-bold">
+                  💸
+                </div>
+                <h3 className="font-extrabold text-sm">নতুন ক্লিনিক খরচ এন্ট্রি (Add Clinic Expense)</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExpenseModalOpen(false)}
+                className="w-7 h-7 rounded-lg bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveExpense} className="p-5 space-y-4 overflow-y-auto text-xs">
+              {/* Department Selection */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  খরচের আওতাধীন বিভাগ (Department):
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExpenseForm(prev => ({ ...prev, department: 'all' }))}
+                    className={`py-2 px-2 rounded-xl font-bold border transition ${
+                      expenseForm.department === 'all'
+                        ? 'bg-purple-50 border-purple-500 text-purple-900 shadow-xs'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    🏥 সার্বিক ক্লিনিক
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExpenseForm(prev => ({ ...prev, department: 'dental' }))}
+                    className={`py-2 px-2 rounded-xl font-bold border transition ${
+                      expenseForm.department === 'dental'
+                        ? 'bg-blue-50 border-blue-500 text-blue-900 shadow-xs'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    🦷 ডেন্টাল বিভাগ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExpenseForm(prev => ({ ...prev, department: 'physiotherapy' }))}
+                    className={`py-2 px-2 rounded-xl font-bold border transition ${
+                      expenseForm.department === 'physiotherapy'
+                        ? 'bg-teal-50 border-teal-500 text-teal-900 shadow-xs'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    ⚡ ফিজিওথেরাপি
+                  </button>
+                </div>
+              </div>
+
+              {/* Expense Category */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  খরচের ক্যাটাগরি (Expense Category):
+                </label>
+                <select
+                  value={expenseForm.category}
+                  onChange={(e) => setExpenseForm(prev => ({ ...prev, category: e.target.value }))}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                >
+                  <option value="ক্লিনিক সাধারণ খরচ (General Clinic)">🏢 ক্লিনিক সাধারণ খরচ (General Clinic)</option>
+                  <option value="স্টাফ / ডাক্তার বেতন (Staff Salary)">👥 স্টাফ / ডাক্তার বেতন (Staff Salary)</option>
+                  <option value="ক্লিনিক ভাড়া (Clinic Rent)">🏠 ক্লিনিক ভাড়া (Clinic Rent)</option>
+                  <option value="বিদ্যুৎ ও ইউটিলিটি বিল (Utility Bill)">⚡ বিদ্যুৎ ও ইউটিলিটি বিল (Utility Bill)</option>
+                  <option value="ডেন্টাল ম্যাটেরিয়াল ও ল্যাব খরচ">🦷 ডেন্টাল ম্যাটেরিয়াল ও ল্যাব খরচ</option>
+                  <option value="ফিজিওথেরাপি ইকুইপমেন্ট ও রক্ষণাবেক্ষণ">⚡ ফিজিওথেরাপি ইকুইপমেন্ট ও রক্ষণাবেক্ষণ</option>
+                  <option value="মার্কেটিং ও প্রচার (Marketing)">📢 মার্কেটিং ও প্রচার (Marketing)</option>
+                  <option value="অফিস ও আপ্যায়ন (Tea/Snacks)">☕ অফিস ও আপ্যায়ন (Tea/Snacks)</option>
+                  <option value="অন্যান্য বিবিধ খরচ (Other)">📦 অন্যান্য বিবিধ খরচ (Other)</option>
+                </select>
+              </div>
+
+              {/* Expense Title */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  খরচের শিরোনাম / বিবরণ: *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="যেমন: চলতি মাসের বিদ্যুৎ বিল / রুট ক্যানেল ফাইল ক্রয়"
+                  value={expenseForm.title}
+                  onChange={(e) => setExpenseForm(prev => ({ ...prev, title: e.target.value }))}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Amount & Date Grid */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    টাকার পরিমাণ (৳): *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    placeholder="0"
+                    value={expenseForm.amount}
+                    onChange={(e) => setExpenseForm(prev => ({ ...prev, amount: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-rose-700 text-sm focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    খরচের তারিখ:
+                  </label>
+                  <input
+                    type="date"
+                    value={expenseForm.date}
+                    onChange={(e) => setExpenseForm(prev => ({ ...prev, date: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Payment Method & Voucher No */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    পেমেন্ট মেথড:
+                  </label>
+                  <select
+                    value={expenseForm.paymentMethod}
+                    onChange={(e) => setExpenseForm(prev => ({ ...prev, paymentMethod: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  >
+                    <option value="Cash">নগদ (Cash)</option>
+                    <option value="bKash">বিকাশ (bKash)</option>
+                    <option value="Nagad">নগদ (Nagad)</option>
+                    <option value="Bank Transfer">ব্যাংক ট্রান্সফার</option>
+                    <option value="Card">কার্ড (POS Card)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    ভাউচার / রসিদ নং:
+                  </label>
+                  <input
+                    type="text"
+                    value={expenseForm.voucherNo}
+                    onChange={(e) => setExpenseForm(prev => ({ ...prev, voucherNo: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Spent By / Note */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    অনুমোদনকারী / খরচকারী:
+                  </label>
+                  <input
+                    type="text"
+                    value={expenseForm.spentBy}
+                    onChange={(e) => setExpenseForm(prev => ({ ...prev, spentBy: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    অতিরিক্ত মন্তব্য (Note):
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="ঐচ্ছিক"
+                    value={expenseForm.note}
+                    onChange={(e) => setExpenseForm(prev => ({ ...prev, note: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 flex items-center justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setIsExpenseModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-md transition cursor-pointer"
+                >
+                  খরচ সংরক্ষণ করুন
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 6. EXPENSE VOUCHER PRINT MODAL */}
+      {selectedExpenseForVoucher && (
+        <ExpenseVoucherModal
+          isOpen={true}
+          expense={selectedExpenseForVoucher}
+          clinicSettings={clinicSettings}
+          onClose={() => setSelectedExpenseForVoucher(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* =========================================================================
+   1.5 DEDICATED PHYSIOTHERAPY DASHBOARD COMPONENT
+   ========================================================================= */
+function PhysiotherapyDashboard({
+  user,
+  clinicSettings,
+  patientsCount,
+  prescriptionsCount,
+  totalCollected,
+  totalDues,
+  employeesList,
+  todayAppointments,
+  recentPrescriptions,
+  lowStockMaterials,
+  todayStr,
+  setDepartment,
+}: any) {
+  const [activeModalityFilter, setActiveModalityFilter] = useState<'all' | 'electro' | 'traction' | 'rehab'>('all');
+
+  // Sample or live today physiotherapy appointments / sessions
+  const physioAppointments = useMemo(() => {
+    return todayAppointments.map((ap: any, index: number) => ({
+      ...ap,
+      sessionNo: ((index % 8) + 1),
+      totalSessions: 10,
+      protocol: index % 3 === 0 
+        ? 'UST + IFT + Cervical Traction' 
+        : index % 3 === 1 
+        ? 'Lumbar Traction + TENS + Moist Heat' 
+        : 'Stroke Rehab + Mobilization + Exercise',
+      condition: index % 3 === 0 
+        ? 'Cervical Spondylosis' 
+        : index % 3 === 1 
+        ? 'PLID / Low Back Pain' 
+        : 'Hemiplegia / Post-Stroke',
+    }));
+  }, [todayAppointments]);
+
+  return (
+    <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto animate-in fade-in duration-300">
+      {/* Top Physiotherapy Hero Header Banner */}
+      <div className="bg-gradient-to-r from-emerald-950 via-teal-900 to-slate-900 rounded-2xl p-5 text-white shadow-lg border border-emerald-800/50 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center space-x-3.5">
+          <div className="w-14 h-14 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-xl flex items-center justify-center text-3xl shadow-lg border border-emerald-300 text-slate-950">
+            ⚡
+          </div>
+          <div>
+            <div className="flex items-center space-x-2">
+              <h1 className="text-xl font-bold font-sans tracking-wide text-white">
+                {clinicSettings?.clinicName || 'ইফরা ডেন্টাল ও ফিজিওথেরাপি সেন্টার'}
+              </h1>
+              <span className="bg-emerald-400 text-slate-950 text-[10px] font-black px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                <Activity className="w-3 h-3" />
+                <span>ফিজিওথেরাপি ড্যাশবোর্ড</span>
+              </span>
+            </div>
+            <p className="text-xs text-emerald-200/90 mt-0.5">
+              স্বাগতম, <span className="font-semibold text-white">{user?.name || 'Administrator'}</span> | ফিজিওথেরাপি, ট্রাকশন ও রিহ্যাবিলিটেশন ম্যানেজমেন্ট
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setDepartment('dental')}
+            className="px-3.5 py-2 bg-slate-900/80 hover:bg-slate-800 text-cyan-300 border border-slate-700/80 font-bold text-xs rounded-xl shadow-sm transition flex items-center space-x-1.5 cursor-pointer"
+            title="ডেন্টাল মোডে সুইচ করুন"
+          >
+            <Stethoscope className="w-4 h-4" />
+            <span>🦷 ডেন্টাল ড্যাশবোর্ডে যান</span>
+          </button>
+
+          <Link
+            href="/patients"
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center space-x-1.5"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>+ ফিজিওথেরাপি রোগী</span>
+          </Link>
+          <Link
+            href="/appointments"
+            className="px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center space-x-1.5"
+          >
+            <Calendar className="w-4 h-4" />
+            <span>+ থেরাপি অ্যাপয়েন্টমেন্ট</span>
+          </Link>
+          <Link
+            href="/prescription"
+            className="px-3.5 py-2 bg-cyan-600 hover:bg-cyan-700 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center space-x-1.5"
+          >
+            <FileText className="w-4 h-4" />
+            <span>+ থেরাপি প্ল্যান ও Rx</span>
+          </Link>
+          <Link
+            href="/payments"
+            className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center space-x-1.5"
+          >
+            <CreditCard className="w-4 h-4" />
+            <span>+ ফিজিওথেরাপি রিসিট</span>
+          </Link>
+        </div>
+      </div>
+
+      {/* KPI Stats Grid - 4 Columns */}
+      <div className="grid grid-cols-12 gap-3 text-xs">
+        <div className="col-span-6 sm:col-span-3 bg-white border border-emerald-200/80 rounded-2xl p-4 shadow-sm hover:shadow transition">
+          <div className="flex items-center justify-between text-slate-500 mb-1">
+            <span className="font-semibold text-emerald-950">মোট ফিজিওথেরাপি রোগী</span>
+            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
+              <Users className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold font-mono text-emerald-950">{patientsCount} জন</div>
+          <div className="text-[11px] text-emerald-700 font-medium mt-1 flex items-center space-x-1">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>সক্রিয় কেস হিস্ট্রি ও রেকর্ডস</span>
+          </div>
+        </div>
+
+        <div className="col-span-6 sm:col-span-3 bg-white border border-teal-200/80 rounded-2xl p-4 shadow-sm hover:shadow transition">
+          <div className="flex items-center justify-between text-slate-500 mb-1">
+            <span className="font-semibold text-teal-950">আজকের থেরাপি সেশন</span>
+            <div className="p-2 bg-teal-50 text-teal-600 rounded-xl">
+              <Activity className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold font-mono text-teal-950">{todayAppointments.length} টি</div>
+          <div className="text-[11px] text-teal-700 font-medium mt-1 flex items-center space-x-1">
+            <Clock className="w-3.5 h-3.5" />
+            <span>রানিং ও নির্ধারিত সেশন কিউ</span>
+          </div>
+        </div>
+
+        <div className="col-span-6 sm:col-span-3 bg-white border border-cyan-200/80 rounded-2xl p-4 shadow-sm hover:shadow transition">
+          <div className="flex items-center justify-between text-slate-500 mb-1">
+            <span className="font-semibold text-cyan-950">থেরাপি প্ল্যান ও প্যাকেজ</span>
+            <div className="p-2 bg-cyan-50 text-cyan-600 rounded-xl">
+              <Layers className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold font-mono text-cyan-950">{prescriptionsCount} টি</div>
+          <div className="text-[11px] text-cyan-700 font-medium mt-1 flex items-center space-x-1">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>UST, IFT, Traction ও এক্সারসাইজ</span>
+          </div>
+        </div>
+
+        <div className="col-span-6 sm:col-span-3 bg-white border border-emerald-300 rounded-2xl p-4 shadow-sm hover:shadow transition bg-gradient-to-br from-emerald-50/40 to-white">
+          <div className="flex items-center justify-between text-slate-500 mb-1">
+            <span className="font-semibold text-emerald-950">ফিজিওথেরাপি আদায়কৃত ফি</span>
+            <div className="p-2 bg-emerald-600 text-white rounded-xl shadow-xs">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold font-mono text-emerald-800">৳ {totalCollected.toLocaleString()}</div>
+          <div className="text-[11px] text-emerald-700 font-semibold mt-1">
+            মোট বকেয়া লেজার: ৳ {totalDues.toLocaleString()}
+          </div>
+        </div>
+      </div>
+
+      {/* Clinical Modalities Status Section */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+          <div className="flex items-center space-x-2">
+            <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+              <Activity className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="font-bold text-sm text-slate-900">ফিজিওথেরাপি মডালিটিজ ও ট্রিটমেন্ট ইউনিট (Clinical Modalities)</h2>
+              <p className="text-[11px] text-slate-500">ইফরা ফিজিওথেরাপি সেন্টারের প্রধান থেরাপিউটিক ইউনিট ও যন্ত্রপাতি</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setActiveModalityFilter('all')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${activeModalityFilter === 'all' ? 'bg-white text-emerald-800 shadow-xs' : 'text-slate-600'}`}
+            >
+              সব ইউনিট
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveModalityFilter('electro')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${activeModalityFilter === 'electro' ? 'bg-white text-emerald-800 shadow-xs' : 'text-slate-600'}`}
+            >
+              ইলেক্ট্রোথেরাপি
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveModalityFilter('traction')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${activeModalityFilter === 'traction' ? 'bg-white text-emerald-800 shadow-xs' : 'text-slate-600'}`}
+            >
+              ট্রাকশন
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveModalityFilter('rehab')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${activeModalityFilter === 'rehab' ? 'bg-white text-emerald-800 shadow-xs' : 'text-slate-600'}`}
+            >
+              রিহ্যাব
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          {/* Card 1: Electrotherapy */}
+          {(activeModalityFilter === 'all' || activeModalityFilter === 'electro') && (
+            <div className="p-3.5 bg-gradient-to-br from-teal-50/90 to-white rounded-xl border border-teal-200 space-y-2">
+              <div className="flex items-center justify-between text-teal-900 font-bold">
+                <span className="flex items-center gap-1.5">
+                  <span className="p-1 bg-teal-600 text-white rounded text-[10px]">⚡</span>
+                  <span>১. ইলেক্ট্রোথেরাপি ইউনিট (Electrotherapy)</span>
+                </span>
+                <span className="text-[10px] px-2 py-0.5 bg-teal-100 text-teal-800 rounded-full font-mono font-bold">Active</span>
+              </div>
+              <ul className="space-y-1.5 text-slate-700 text-[11px]">
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-teal-100 shadow-2xs">
+                  <span>আল্ট্রাসাউন্ড থেরাপি (UST 1MHz / 3MHz)</span>
+                  <span className="text-emerald-700 font-bold font-mono">রেডি</span>
+                </li>
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-teal-100 shadow-2xs">
+                  <span>ইন্টারফেরেন্সিয়াল থেরাপি (IFT - 4 Pole)</span>
+                  <span className="text-emerald-700 font-bold font-mono">রেডি</span>
+                </li>
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-teal-100 shadow-2xs">
+                  <span>টেনস থেরাপি (TENS 4-Channel)</span>
+                  <span className="text-emerald-700 font-bold font-mono">রেডি</span>
+                </li>
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-teal-100 shadow-2xs">
+                  <span>শর্টওয়েভ ডায়াথার্মি (SWD) / লেজার (LLLT)</span>
+                  <span className="text-emerald-700 font-bold font-mono">রেডি</span>
+                </li>
+              </ul>
+            </div>
+          )}
+
+          {/* Card 2: Traction & Mechanical */}
+          {(activeModalityFilter === 'all' || activeModalityFilter === 'traction') && (
+            <div className="p-3.5 bg-gradient-to-br from-cyan-50/90 to-white rounded-xl border border-cyan-200 space-y-2">
+              <div className="flex items-center justify-between text-cyan-900 font-bold">
+                <span className="flex items-center gap-1.5">
+                  <span className="p-1 bg-cyan-600 text-white rounded text-[10px]">🔄</span>
+                  <span>২. মেকানিক্যাল ও ট্রাকশন ইউনিট (Traction)</span>
+                </span>
+                <span className="text-[10px] px-2 py-0.5 bg-cyan-100 text-cyan-800 rounded-full font-mono font-bold">Active</span>
+              </div>
+              <ul className="space-y-1.5 text-slate-700 text-[11px]">
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-cyan-100 shadow-2xs">
+                  <span>ডিজিটাল সার্ভাইকাল ট্রাকশন (Cervical)</span>
+                  <span className="text-cyan-700 font-bold font-mono">রেডি</span>
+                </li>
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-cyan-100 shadow-2xs">
+                  <span>ডিজিটাল লাম্বার ট্রাকশন (Lumbar Traction)</span>
+                  <span className="text-cyan-700 font-bold font-mono">রেডি</span>
+                </li>
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-cyan-100 shadow-2xs">
+                  <span>হট ও কোল্ড থেরাপি প্যাক্স (Moist Heat / Cryo)</span>
+                  <span className="text-cyan-700 font-bold font-mono">রেডি</span>
+                </li>
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-cyan-100 shadow-2xs">
+                  <span>স্পাইনাল ও জয়েন্ট মোবিলাইজেশন বেড</span>
+                  <span className="text-cyan-700 font-bold font-mono">রেডি</span>
+                </li>
+              </ul>
+            </div>
+          )}
+
+          {/* Card 3: Rehabilitation & Exercise */}
+          {(activeModalityFilter === 'all' || activeModalityFilter === 'rehab') && (
+            <div className="p-3.5 bg-gradient-to-br from-emerald-50/90 to-white rounded-xl border border-emerald-200 space-y-2">
+              <div className="flex items-center justify-between text-emerald-900 font-bold">
+                <span className="flex items-center gap-1.5">
+                  <span className="p-1 bg-emerald-600 text-white rounded text-[10px]">🏃</span>
+                  <span>৩. রিহ্যাব ও এক্সারসাইজ থেরাপি (Rehab)</span>
+                </span>
+                <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full font-mono font-bold">Protocol</span>
+              </div>
+              <ul className="space-y-1.5 text-slate-700 text-[11px]">
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-emerald-100 shadow-2xs">
+                  <span>স্ট্রোক ও প্যারালাইসিস রিহ্যাব (Hemiplegia)</span>
+                  <span className="text-emerald-700 font-bold font-mono">প্রটোকল</span>
+                </li>
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-emerald-100 shadow-2xs">
+                  <span>ফ্রোজেন শোল্ডার ও স্পোর্টস ইনজুরি মোবিলাইজেশন</span>
+                  <span className="text-emerald-700 font-bold font-mono">প্রটোকল</span>
+                </li>
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-emerald-100 shadow-2xs">
+                  <span>পিএলআইডি ও ব্যাক পেইন স্ট্রেন্থেনিং</span>
+                  <span className="text-emerald-700 font-bold font-mono">প্রটোকল</span>
+                </li>
+                <li className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-emerald-100 shadow-2xs">
+                  <span>প্যারালাল বার ও ওয়াকিং রিহ্যাবিলিটেশন</span>
+                  <span className="text-emerald-700 font-bold font-mono">প্রটোকল</span>
+                </li>
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Today's Physiotherapy Session Queue & Appointments */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+          <div className="flex items-center space-x-2">
+            <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center font-bold">
+              <Clock className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="font-bold text-sm text-slate-900">আজকের ফিজিওথেরাপি সেশন ও সিরিয়াল কিউ (Session Queue)</h2>
+              <p className="text-[11px] text-slate-500">রোগীর সেশন নম্বর, নির্ধারিত প্রটোকল এবং থেরাপি রানিং স্ট্যাটাস</p>
+            </div>
+          </div>
+          <Link
+            href="/appointments"
+            className="text-xs font-bold text-emerald-700 hover:text-emerald-900 hover:underline flex items-center gap-1"
+          >
+            <span>সব অ্যাপয়েন্টমেন্ট দেখুন</span>
+            <ArrowUpRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+
+        {physioAppointments.length === 0 ? (
+          <div className="py-8 text-center text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+            <Activity className="w-8 h-8 mx-auto mb-2 text-emerald-400 opacity-60" />
+            <p className="text-xs font-semibold text-slate-600">আজকের জন্য কোনো ফিজিওথেরাপি সিরিয়াল নেই।</p>
+            <Link
+              href="/appointments"
+              className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-emerald-600 hover:underline"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>নতুন থেরাপি অ্যাপয়েন্টমেন্ট যোগ করুন</span>
+            </Link>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-emerald-50/70 text-emerald-950 font-bold border-b border-emerald-100">
+                <tr>
+                  <th className="py-2.5 px-3">রোগীর নাম ও রেজি নং</th>
+                  <th className="py-2.5 px-3">রোগ ও প্রধান সমস্যা</th>
+                  <th className="py-2.5 px-3">নির্ধারিত মডালিটিজ / প্রটোকল</th>
+                  <th className="py-2.5 px-3 text-center">সেশন নম্বর</th>
+                  <th className="py-2.5 px-3 text-center">স্ট্যাটাস</th>
+                  <th className="py-2.5 px-3 text-right">অ্যাকশন</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {physioAppointments.map((ap: any, idx: number) => (
+                  <tr key={ap.id || idx} className="hover:bg-slate-50/80 transition">
+                    <td className="py-2.5 px-3 font-semibold text-slate-900">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-[10px] font-bold">
+                          {idx + 1}
+                        </span>
+                        <div>
+                          <div>{ap.patientName || ap.name || 'রোগী'}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">#{ap.regNo || ap.id}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-3 text-slate-700 font-medium">
+                      <span className="px-2 py-0.5 bg-slate-100 rounded text-slate-800 text-[11px]">
+                        {ap.condition || 'Low Back Pain / Spondylosis'}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-slate-700">
+                      <span className="font-semibold text-emerald-800">
+                        {ap.protocol || 'UST + IFT + Cervical Traction'}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-900 rounded-full font-bold font-mono text-[10px]">
+                        সেশন {ap.sessionNo || 1} / {ap.totalSessions || 10}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      <span className="px-2 py-0.5 bg-teal-50 text-teal-800 border border-teal-200 rounded-full font-bold text-[10px]">
+                        {ap.status || 'Scheduled'}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-right">
+                      <div className="inline-flex items-center gap-1">
+                        <Link
+                          href={`/prescription?regNo=${ap.regNo || ''}&apntId=${ap.id || ''}&name=${encodeURIComponent(ap.patientName || ap.name || '')}`}
+                          className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-[10px] font-bold transition flex items-center gap-0.5"
+                        >
+                          <FileText className="w-3 h-3" />
+                          <span>সেশন শুরু</span>
+                        </Link>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1709,6 +3509,23 @@ function ReceptionistDashboard({
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [expensesList, setExpensesList] = useState<ExpenseRecord[]>([]);
+  const [paymentsList, setPaymentsList] = useState<PaymentRecord[]>([]);
+
+  // Expense Modal State
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState<boolean>(false);
+  const [selectedExpenseForVoucher, setSelectedExpenseForVoucher] = useState<ExpenseRecord | null>(null);
+  const [expenseForm, setExpenseForm] = useState({
+    title: '',
+    amount: '',
+    category: 'ক্লিনিক সাধারণ খরচ (General Clinic)',
+    department: 'all' as 'all' | 'dental' | 'physiotherapy',
+    paymentMethod: 'Cash',
+    spentBy: user?.name || 'Receptionist',
+    voucherNo: `EXP-${Date.now().toString().slice(-6)}`,
+    note: '',
+    date: todayStr || new Date().toISOString().split('T')[0],
+  });
 
   // Thermal Token Modal State
   const [selectedTokenApnt, setSelectedTokenApnt] = useState<Appointment | null>(null);
@@ -1717,12 +3534,16 @@ function ReceptionistDashboard({
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [apnts, docs] = await Promise.all([
+      const [apnts, docs, exps, pays] = await Promise.all([
         db.appointments.reverse().toArray(),
         db.employees.where('role').equals('Doctor').and((e) => e.status === 'Active').toArray(),
+        db.expenses.reverse().toArray(),
+        db.payments.reverse().toArray(),
       ]);
       setAllAppointments(apnts);
       setDoctorsList(docs);
+      setExpensesList(exps);
+      setPaymentsList(pays);
     } catch (err) {
       console.error('Failed to load appointments for receptionist:', err);
     } finally {
@@ -1831,6 +3652,81 @@ function ReceptionistDashboard({
   const completedList = filteredAppointments.filter((a) => a.status === 'Completed');
   const totalFees = filteredAppointments.reduce((acc, a) => acc + (a.visitFee || a.paid || 0), 0);
 
+  // Filtered Payments within dateRange
+  const filteredPayments = useMemo(() => {
+    return paymentsList.filter((p) => {
+      const d = p.date || (p.createdAt ? p.createdAt.split('T')[0] : '');
+      if (d && (d < dateRange.start || d > dateRange.end)) return false;
+      return true;
+    });
+  }, [paymentsList, dateRange]);
+
+  const dateRangeCollected = useMemo(() => {
+    return filteredPayments.reduce((acc, p) => acc + (p.paidAmount || 0), 0);
+  }, [filteredPayments]);
+
+  // Filtered Expenses within dateRange
+  const filteredExpenses = useMemo(() => {
+    return expensesList.filter((e) => {
+      const d = e.date || (e.createdAt ? e.createdAt.split('T')[0] : '');
+      if (d && (d < dateRange.start || d > dateRange.end)) return false;
+      return true;
+    });
+  }, [expensesList, dateRange]);
+
+  const dateRangeExpenses = useMemo(() => {
+    return filteredExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+  }, [filteredExpenses]);
+
+  const netCashInHand = dateRangeCollected - dateRangeExpenses;
+
+  // Handle Save Expense for Receptionist
+  const handleSaveExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!expenseForm.title || !expenseForm.amount || Number(expenseForm.amount) <= 0) {
+      alert('দয়া করে খরচের সঠিক বিবরণ ও টাকার পরিমাণ লিখুন।');
+      return;
+    }
+
+    try {
+      const newExpense: ExpenseRecord = {
+        id: `exp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        date: expenseForm.date,
+        category: expenseForm.category,
+        department: expenseForm.department,
+        title: expenseForm.title.trim(),
+        amount: Number(expenseForm.amount),
+        paymentMethod: expenseForm.paymentMethod,
+        spentBy: expenseForm.spentBy.trim(),
+        voucherNo: expenseForm.voucherNo.trim(),
+        note: expenseForm.note.trim(),
+        createdAt: new Date().toISOString(),
+      };
+
+      await db.expenses.add(newExpense);
+      syncEngine.logMutation('expenses', 'INSERT', newExpense.id, newExpense);
+
+      setExpenseForm({
+        title: '',
+        amount: '',
+        category: 'ক্লিনিক সাধারণ খরচ (General Clinic)',
+        department: 'all',
+        paymentMethod: 'Cash',
+        spentBy: user?.name || 'Receptionist',
+        voucherNo: `EXP-${Date.now().toString().slice(-6)}`,
+        note: '',
+        date: todayStr || new Date().toISOString().split('T')[0],
+      });
+
+      setIsExpenseModalOpen(false);
+      await loadData();
+      setSelectedExpenseForVoucher(newExpense);
+    } catch (err) {
+      console.error('Failed to add expense:', err);
+      alert('খরচ এন্ট্রি করতে সমস্যা হয়েছে!');
+    }
+  };
+
   const handleQuickStatusChange = async (id: string, newStatus: Appointment['status']) => {
     try {
       await db.appointments.update(id, { status: newStatus });
@@ -1872,12 +3768,20 @@ function ReceptionistDashboard({
               </span>
             </div>
             <p className="text-xs text-teal-100 mt-0.5">
-              স্বাগতম, <span className="font-semibold text-white">{user?.name || 'রিসেপশনিস্ট ও ক্যাশিয়ার'}</span> | রোগী সিরিয়াল বুকিং, পেমেন্ট কালেকশন ও মনিটর
+              স্বাগতম, <span className="font-semibold text-white">{user?.name || 'রিসেপশনিস্ট ও ক্যাশিয়ার'}</span> | রোগী সিরিয়াল বুকিং, পেমেন্ট কালেকশন, ক্লিনিক খরচ ও মনিটর
             </p>
           </div>
         </div>
 
         <div className="flex items-center space-x-2">
+          <button
+            type="button"
+            onClick={() => setIsExpenseModalOpen(true)}
+            className="px-3.5 py-2 bg-gradient-to-r from-rose-500 to-red-600 hover:from-rose-600 hover:to-red-700 text-white font-bold text-xs rounded-lg shadow-md transition flex items-center space-x-1.5 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>+ নতুন খরচ এন্ট্রি (Add Expense)</span>
+          </button>
           <Link
             href="/appointments"
             className="px-4 py-2 bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold text-xs rounded-lg shadow-md transition flex items-center space-x-1.5"
@@ -1891,13 +3795,6 @@ function ReceptionistDashboard({
           >
             <CreditCard className="w-4 h-4" />
             <span>পেমেন্ট ও কালেকশন</span>
-          </Link>
-          <Link
-            href="/patients"
-            className="px-3.5 py-2 bg-white/15 hover:bg-white/25 text-white font-semibold text-xs rounded-lg border border-white/20 transition flex items-center space-x-1.5"
-          >
-            <FileText className="w-4 h-4" />
-            <span>রোগী তালিকা</span>
           </Link>
         </div>
       </div>
@@ -2054,24 +3951,26 @@ function ReceptionistDashboard({
 
         <div className="col-span-6 sm:col-span-3 bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm hover:shadow transition">
           <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="font-semibold">চিকিৎসা সম্পন্ন</span>
+            <span className="font-semibold">পেমেন্ট আদায় (Collections)</span>
             <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-              <CheckCircle2 className="w-4 h-4" />
+              <CreditCard className="w-4 h-4" />
             </div>
           </div>
-          <div className="text-2xl font-bold font-mono text-emerald-700">{completedList.length} জন</div>
-          <div className="text-[11px] text-emerald-600 font-medium mt-1">সেশন কমপ্লিট</div>
+          <div className="text-2xl font-bold font-mono text-emerald-700">৳ {dateRangeCollected.toLocaleString()}</div>
+          <div className="text-[11px] text-emerald-600 font-medium mt-1">মোট বিল সংগ্রহ</div>
         </div>
 
         <div className="col-span-6 sm:col-span-3 bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm hover:shadow transition">
           <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="font-semibold">ভিজিট ফি সংগ্রহ</span>
-            <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
-              <CreditCard className="w-4 h-4" />
+            <span className="font-semibold">ক্লিনিক খরচ ও ক্যাশ</span>
+            <div className="p-2 bg-rose-50 text-rose-600 rounded-lg">
+              <Receipt className="w-4 h-4" />
             </div>
           </div>
-          <div className="text-2xl font-bold font-mono text-blue-900">৳ {totalFees.toLocaleString()}</div>
-          <div className="text-[11px] text-slate-500 mt-1">মোট রোগী: {patientsCount} জন</div>
+          <div className="text-2xl font-bold font-mono text-rose-800">৳ {dateRangeExpenses.toLocaleString()}</div>
+          <div className="text-[11px] font-bold text-teal-700 mt-1">
+            ক্যাশ ইন হ্যান্ড: ৳ {netCashInHand.toLocaleString()}
+          </div>
         </div>
       </div>
 
@@ -2270,6 +4169,226 @@ function ReceptionistDashboard({
           }}
           appointment={selectedTokenApnt}
           clinicSettings={clinicSettings}
+        />
+      )}
+
+      {/* Add Expense Modal (রিসেপশন খরচ এন্ট্রি ফর্ম) */}
+      {isExpenseModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 bg-gradient-to-r from-rose-600 to-red-600 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center font-bold">
+                  💸
+                </div>
+                <h3 className="font-extrabold text-sm">নতুন ক্লিনিক খরচ এন্ট্রি (Add Expense)</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExpenseModalOpen(false)}
+                className="w-7 h-7 rounded-lg bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveExpense} className="p-5 space-y-4 overflow-y-auto text-xs">
+              {/* Department Selection */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  খরচের আওতাধীন বিভাগ (Department):
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExpenseForm((prev) => ({ ...prev, department: 'all' }))}
+                    className={`py-2 px-2 rounded-xl font-bold border transition ${
+                      expenseForm.department === 'all'
+                        ? 'bg-purple-50 border-purple-500 text-purple-900 shadow-xs'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    🏥 সার্বিক
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExpenseForm((prev) => ({ ...prev, department: 'dental' }))}
+                    className={`py-2 px-2 rounded-xl font-bold border transition ${
+                      expenseForm.department === 'dental'
+                        ? 'bg-blue-50 border-blue-500 text-blue-900 shadow-xs'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    🦷 ডেন্টাল
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExpenseForm((prev) => ({ ...prev, department: 'physiotherapy' }))}
+                    className={`py-2 px-2 rounded-xl font-bold border transition ${
+                      expenseForm.department === 'physiotherapy'
+                        ? 'bg-teal-50 border-teal-500 text-teal-900 shadow-xs'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    ⚡ ফিজিও
+                  </button>
+                </div>
+              </div>
+
+              {/* Expense Category */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  খরচের ক্যাটাগরি (Expense Category):
+                </label>
+                <select
+                  value={expenseForm.category}
+                  onChange={(e) => setExpenseForm((prev) => ({ ...prev, category: e.target.value }))}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                >
+                  <option value="ক্লিনিক সাধারণ খরচ (General Clinic)">🏢 ক্লিনিক সাধারণ খরচ (General Clinic)</option>
+                  <option value="স্টাফ / ডাক্তার বেতন (Staff Salary)">👥 স্টাফ / ডাক্তার বেতন (Staff Salary)</option>
+                  <option value="ক্লিনিক ভাড়া (Clinic Rent)">🏠 ক্লিনিক ভাড়া (Clinic Rent)</option>
+                  <option value="বিদ্যুৎ ও ইউটিলিটি বিল (Utility Bill)">⚡ বিদ্যুৎ ও ইউটিলিটি বিল (Utility Bill)</option>
+                  <option value="ডেন্টাল ম্যাটেরিয়াল ও ল্যাব খরচ">🦷 ডেন্টাল ম্যাটেরিয়াল ও ল্যাব খরচ</option>
+                  <option value="ফিজিওথেরাপি ইকুইপমেন্ট ও রক্ষণাবেক্ষণ">⚡ ফিজিওথেরাপি ইকুইপমেন্ট ও রক্ষণাবেক্ষণ</option>
+                  <option value="মার্কেটিং ও প্রচার (Marketing)">📢 মার্কেটিং ও প্রচার (Marketing)</option>
+                  <option value="অফিস ও আপ্যায়ন (Tea/Snacks)">☕ অফিস ও আপ্যায়ন (Tea/Snacks)</option>
+                  <option value="অন্যান্য বিবিধ খরচ (Other)">📦 অন্যান্য বিবিধ খরচ (Other)</option>
+                </select>
+              </div>
+
+              {/* Expense Title */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  খরচের শিরোনাম / বিবরণ: *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="যেমন: অফিস নাস্তা ও চা / সার্জিক্যাল গ্লাভস ক্রয়"
+                  value={expenseForm.title}
+                  onChange={(e) => setExpenseForm((prev) => ({ ...prev, title: e.target.value }))}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Amount & Date Grid */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    টাকার পরিমাণ (৳): *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    placeholder="0"
+                    value={expenseForm.amount}
+                    onChange={(e) => setExpenseForm((prev) => ({ ...prev, amount: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-rose-700 text-sm focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    খরচের তারিখ:
+                  </label>
+                  <input
+                    type="date"
+                    value={expenseForm.date}
+                    onChange={(e) => setExpenseForm((prev) => ({ ...prev, date: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Payment Method & Voucher No */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    পেমেন্ট মেথড:
+                  </label>
+                  <select
+                    value={expenseForm.paymentMethod}
+                    onChange={(e) => setExpenseForm((prev) => ({ ...prev, paymentMethod: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  >
+                    <option value="Cash">নগদ (Cash)</option>
+                    <option value="bKash">বিকাশ (bKash)</option>
+                    <option value="Nagad">নগদ (Nagad)</option>
+                    <option value="Bank Transfer">ব্যাংক ট্রান্সফার</option>
+                    <option value="Card">কার্ড (POS Card)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    ভাউচার নং:
+                  </label>
+                  <input
+                    type="text"
+                    value={expenseForm.voucherNo}
+                    onChange={(e) => setExpenseForm((prev) => ({ ...prev, voucherNo: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Spent By / Note */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    অনুমোদনকারী / খরচকারী:
+                  </label>
+                  <input
+                    type="text"
+                    value={expenseForm.spentBy}
+                    onChange={(e) => setExpenseForm((prev) => ({ ...prev, spentBy: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    মন্তব্য (Note):
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="ঐচ্ছিক"
+                    value={expenseForm.note}
+                    onChange={(e) => setExpenseForm((prev) => ({ ...prev, note: e.target.value }))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 flex items-center justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setIsExpenseModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-md transition cursor-pointer"
+                >
+                  খরচ সংরক্ষণ করুন
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Expense Voucher Print Modal */}
+      {selectedExpenseForVoucher && (
+        <ExpenseVoucherModal
+          isOpen={true}
+          expense={selectedExpenseForVoucher}
+          clinicSettings={clinicSettings}
+          onClose={() => setSelectedExpenseForVoucher(null)}
         />
       )}
     </div>

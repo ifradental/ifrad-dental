@@ -7,8 +7,10 @@ class SyncEngine {
   private listeners: ((status: SyncStatus, pendingCount: number) => void)[] = [];
   private dataListeners: ((collections?: string[]) => void)[] = [];
   private syncTimer: NodeJS.Timeout | null = null;
+  private debounceTimer: NodeJS.Timeout | null = null;
   private isSyncing = false;
   private isPulling = false;
+  private lastPullTime = 0;
   private broadcastChannel: BroadcastChannel | null = null;
 
   constructor() {
@@ -23,7 +25,7 @@ class SyncEngine {
           this.broadcastChannel = new BroadcastChannel('ifrad_sync_channel');
           this.broadcastChannel.onmessage = (event) => {
             if (event.data?.type === 'DATA_CHANGED') {
-              this.pullUpdates().catch(() => {});
+              this.schedulePullUpdates(1000);
             }
           };
         } catch (e) {
@@ -34,42 +36,37 @@ class SyncEngine {
       // Listen to cross-tab localStorage events as fallback
       window.addEventListener('storage', (e) => {
         if (e.key === 'ifrad_last_sync_broadcast') {
-          this.pullUpdates().catch(() => {});
+          this.schedulePullUpdates(1000);
         }
       });
 
-      // Pull updates immediately when tab gains focus or becomes visible
+      // Pull updates throttled when tab gains focus or becomes visible
       window.addEventListener('focus', () => {
-        if (navigator.onLine) {
-          this.pullUpdates().catch(() => {});
-        }
-      });
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && navigator.onLine) {
-          this.pullUpdates().catch(() => {});
+        if (navigator.onLine && Date.now() - this.lastPullTime > 15000) {
+          this.schedulePullUpdates(500);
         }
       });
 
-      // Initial auto-pull, admin sync, and trigger on startup
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && navigator.onLine && Date.now() - this.lastPullTime > 15000) {
+          this.schedulePullUpdates(500);
+        }
+      });
+
+      // Initial auto-pull on startup after 1s
       setTimeout(async () => {
         if (navigator.onLine) {
-          await this.ensureAdminSynced();
           this.pullUpdates().catch(() => {});
-          this.triggerSync().catch(() => {});
+          this.scheduleSync(1500);
         }
-      }, 500);
+      }, 1000);
 
-      // Periodic background fallback sync every 30 seconds
+      // Periodic background fallback sync every 60 seconds (lightweight)
       this.syncTimer = setInterval(() => {
-        if (navigator.onLine) {
-          if (!this.isSyncing) {
-            this.triggerSync().catch(() => {});
-          }
-          if (!this.isPulling) {
-            this.pullUpdates().catch(() => {});
-          }
+        if (navigator.onLine && !this.isSyncing) {
+          this.scheduleSync(100);
         }
-      }, 30000);
+      }, 60000);
     }
   }
 
@@ -121,17 +118,36 @@ class SyncEngine {
   }
 
   private async notify() {
-    const pendingCount = await db.syncQueue.where('status').equals('PENDING').count();
-    this.listeners.forEach((cb) => cb(this.status, pendingCount));
+    try {
+      const pendingCount = await db.syncQueue.where('status').equals('PENDING').count();
+      this.listeners.forEach((cb) => cb(this.status, pendingCount));
+    } catch (_) {}
   }
 
   private async handleOnlineStatusChange(isOnline: boolean) {
     this.status = isOnline ? 'online' : 'offline';
     await this.notify();
     if (isOnline) {
-      this.pullUpdates().catch(() => {});
-      this.triggerSync().catch(() => {});
+      this.schedulePullUpdates(500);
+      this.scheduleSync(1000);
     }
+  }
+
+  public scheduleSync(delayMs = 800) {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+    this.debounceTimer = setTimeout(() => {
+      this.triggerSync().catch(() => {});
+    }, delayMs);
+  }
+
+  public schedulePullUpdates(delayMs = 800) {
+    setTimeout(() => {
+      if (Date.now() - this.lastPullTime > 5000) {
+        this.pullUpdates().catch(() => {});
+      }
+    }, delayMs);
   }
 
   public async logMutation(
@@ -154,55 +170,9 @@ class SyncEngine {
     await this.notify();
     this.notifyDataChange([collection]);
 
-    // If online, immediately try to sync to MongoDB
-    if (navigator.onLine) {
-      this.triggerSync().catch(() => {});
-    }
-  }
-
-  /**
-   * Ensures the active admin user is stored and synchronized to MongoDB.
-   */
-  public async ensureAdminSynced(): Promise<void> {
-    try {
-      const admin =
-        (await db.employees.where('role').equals('Admin').first()) ||
-        (await db.employees.get('emp_admin'));
-      if (admin) {
-        const inQueue = await db.syncQueue
-          .where('documentId')
-          .equals(admin.id)
-          .first();
-        if (!inQueue) {
-          await this.logMutation('employees', 'UPDATE', admin.id, admin);
-        }
-      }
-    } catch (e: any) {
-      console.warn('ensureAdminSynced notice:', e.message);
-    }
-  }
-
-  /**
-   * Ensures all local marketing tasks and reports are queued and pushed to MongoDB.
-   */
-  public async ensureMarketingSynced(): Promise<void> {
-    try {
-      const localTasks = await db.marketingTasks.toArray();
-      for (const t of localTasks) {
-        const inQueue = await db.syncQueue.where('documentId').equals(t.id).first();
-        if (!inQueue) {
-          await this.logMutation('marketingTasks', 'UPDATE', t.id, t);
-        }
-      }
-      const localReports = await db.marketingReports.toArray();
-      for (const r of localReports) {
-        const inQueue = await db.syncQueue.where('documentId').equals(r.id).first();
-        if (!inQueue) {
-          await this.logMutation('marketingReports', 'UPDATE', r.id, r);
-        }
-      }
-    } catch (e: any) {
-      console.warn('ensureMarketingSynced notice:', e.message);
+    // Debounced trigger to batch rapid changes together without stalling the browser
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      this.scheduleSync(800);
     }
   }
 
@@ -212,18 +182,12 @@ class SyncEngine {
   public async triggerSync(): Promise<{ success: boolean; syncedCount: number; message: string }> {
     if (this.isSyncing) return { success: true, syncedCount: 0, message: 'Sync in progress' };
 
-    await this.ensureAdminSynced();
-    await this.ensureMarketingSynced();
+    const pendingItems = await db.syncQueue
+      .where('status')
+      .equals('PENDING')
+      .limit(50)
+      .toArray();
 
-    const settings = await db.settings.get('default_settings');
-    // Default to Next.js API route /api/sync so it works natively on Vercel and local
-    const syncUrl =
-      settings?.cloudSyncUrl && !settings.cloudSyncUrl.includes('localhost:5000')
-        ? settings.cloudSyncUrl
-        : '/api/sync';
-    const apiKey = settings?.cloudSyncApiKey || 'DENTIST_SECRET_KEY_2026';
-
-    const pendingItems = await db.syncQueue.where('status').equals('PENDING').toArray();
     if (pendingItems.length === 0) {
       this.status = navigator.onLine ? 'online' : 'offline';
       await this.notify();
@@ -235,7 +199,13 @@ class SyncEngine {
     await this.notify();
 
     try {
-      // Send batch to MongoDB API
+      const settings = await db.settings.get('default_settings');
+      const syncUrl =
+        settings?.cloudSyncUrl && !settings.cloudSyncUrl.includes('localhost:5000')
+          ? settings.cloudSyncUrl
+          : '/api/sync';
+      const apiKey = settings?.cloudSyncApiKey || 'DENTIST_SECRET_KEY_2026';
+
       const response = await fetch(`${syncUrl}/push`, {
         method: 'POST',
         headers: {
@@ -286,20 +256,25 @@ class SyncEngine {
       if (result.syncedAt || queueIdsToDelete.length > 0) {
         await db.settings.update('default_settings', {
           lastSyncedAt: result.syncedAt || new Date().toISOString(),
-        });
+        }).catch(() => {});
       }
 
       this.status = 'online';
       this.isSyncing = false;
       await this.notify();
 
+      // Check if there are remaining pending items in queue
+      const remainingCount = await db.syncQueue.where('status').equals('PENDING').count();
+      if (remainingCount > 0) {
+        this.scheduleSync(500);
+      }
+
       return {
         success: true,
         syncedCount: queueIdsToDelete.length,
-        message: `Successfully synced ${queueIdsToDelete.length} of ${pendingItems.length} records to MongoDB Atlas!`,
+        message: `Successfully synced ${queueIdsToDelete.length} records to MongoDB Atlas!`,
       };
     } catch (error: any) {
-      // Gracefully handle network disconnection / offline status without throwing uncaught console errors
       this.status = typeof navigator !== 'undefined' && navigator.onLine ? 'error' : 'offline';
       this.isSyncing = false;
       await this.notify();
@@ -307,7 +282,7 @@ class SyncEngine {
       return {
         success: false,
         syncedCount: 0,
-        message: `Saved locally in IndexedDB. Will sync when MongoDB is reachable: ${error.message}`,
+        message: `Saved locally. Syncing will resume automatically: ${error.message}`,
       };
     }
   }
@@ -318,6 +293,7 @@ class SyncEngine {
   public async pullUpdates(): Promise<{ success: boolean; pulledCount: number }> {
     if (this.isPulling) return { success: true, pulledCount: 0 };
     this.isPulling = true;
+    this.lastPullTime = Date.now();
 
     try {
       const settings = await db.settings.get('default_settings');
@@ -345,7 +321,7 @@ class SyncEngine {
       let totalPulled = 0;
       const changedCollections: string[] = [];
 
-      // 1. Process updates
+      // Process updates in fast batches
       const tables: { key: string; table: any }[] = [
         { key: 'patients', table: db.patients },
         { key: 'prescriptions', table: db.prescriptions },
@@ -381,32 +357,6 @@ class SyncEngine {
         changedCollections.push('settings');
       }
 
-      // 2. Process deletions using server's allIds list
-      if (data.allIds) {
-        const pendingItems = await db.syncQueue.where('status').equals('PENDING').toArray();
-        const pendingDocIds = new Set(pendingItems.map((item) => item.documentId));
-
-        for (const { key, table } of tables) {
-          const serverIdList = data.allIds[key];
-          if (Array.isArray(serverIdList)) {
-            const serverIdSet = new Set(serverIdList);
-            const localRecords = await table.toArray();
-            const staleLocalIds: string[] = [];
-
-            for (const item of localRecords) {
-              if (item.id && !serverIdSet.has(item.id) && !pendingDocIds.has(item.id)) {
-                staleLocalIds.push(item.id);
-              }
-            }
-
-            if (staleLocalIds.length > 0) {
-              await table.bulkDelete(staleLocalIds);
-              changedCollections.push(key);
-            }
-          }
-        }
-      }
-
       // Update settings lastSyncedAt
       if (data.pulledAt) {
         await db.settings.update('default_settings', {
@@ -428,4 +378,3 @@ class SyncEngine {
 }
 
 export const syncEngine = new SyncEngine();
-
