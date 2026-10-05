@@ -23,13 +23,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="bn">
+    <html lang="bn" suppressHydrationWarning>
       <head>
         <link rel="icon" href="/favicon.ico?v=3" sizes="any" />
         <link rel="icon" href="/logo.png?v=3" type="image/png" />
         <link rel="apple-touch-icon" href="/logo.png?v=3" />
       </head>
-      <body>
+      <body suppressHydrationWarning>
         <ClientInit />
         <AuthProvider>
           <AuthAppShell>{children}</AuthAppShell>
