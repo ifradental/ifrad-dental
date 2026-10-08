@@ -4031,9 +4031,9 @@ function ReceptionistDashboard({
                 {filteredAppointments.map((apnt: any) => (
                   <tr key={apnt.id} className="hover:bg-teal-50/30 transition">
                     {/* Serial */}
-                    <td className="p-2.5 text-center font-bold font-mono text-teal-900">
-                      <span className="w-7 h-7 bg-teal-100 rounded-full inline-flex items-center justify-center font-bold">
-                        #{apnt.serial}
+                    <td className="p-2.5 text-center font-bold font-mono">
+                      <span className="px-2 py-0.5 bg-teal-50 border border-teal-200 text-teal-900 rounded-lg inline-flex items-center justify-center font-mono font-bold text-xs shadow-2xs">
+                        {(apnt.serialType || 'NEW').toUpperCase()}-#{apnt.serial}
                       </span>
                     </td>
 

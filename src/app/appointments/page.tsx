@@ -32,11 +32,13 @@ import {
   Upload,
   Sparkles,
   ChevronDown,
-  Check
+  Check,
+  Hash
 } from 'lucide-react';
 import { 
   db, 
   type Appointment, 
+  type AppointmentSerialType,
   type Patient, 
   type Employee, 
   type ClinicSettings,
@@ -45,7 +47,7 @@ import {
 import { syncEngine, type SyncStatus } from '@/lib/syncEngine';
 import { useAuth } from '@/context/AuthContext';
 import { logActivity } from '@/lib/activityLogger';
-import ThermalTokenModal, { printThermalReceipt } from '@/components/appointments/ThermalTokenModal';
+import ThermalTokenModal, { printThermalReceipt, getSerialTypeMeta } from '@/components/appointments/ThermalTokenModal';
 
 const STANDARD_TIME_SLOTS_30MIN = [
   '10:30 AM',
@@ -195,10 +197,12 @@ export default function AppointmentPage() {
   const [viewFilter, setViewFilter] = useState<'today' | 'upcoming' | 'absent' | 'all'>('today');
   const [selectedDoctorFilter, setSelectedDoctorFilter] = useState<string>('All');
   const [selectedSlotFilter, setSelectedSlotFilter] = useState<string>('ALL');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<'ALL' | AppointmentSerialType>('ALL');
   const [sortBy, setSortBy] = useState<'serial' | 'time_asc' | 'time_desc'>('serial');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Form State
+  const [serialType, setSerialType] = useState<AppointmentSerialType>('NEW');
   const [searchRegOrPhone, setSearchRegOrPhone] = useState<string>('');
   const [name, setName] = useState<string>('');
   const [age, setAge] = useState<string>('');
@@ -428,6 +432,7 @@ export default function AppointmentPage() {
       setSex(p.sex);
       setMobile(p.mobile);
       setAddress(p.address || '');
+      setSerialType('OLD');
     } else {
       alert(`এই নম্বর বা রেজি নং দিয়ে কোনো পূর্ববর্তী রোগীর তথ্য পাওয়া যায়নি। নতুন রোগী হিসেবে তথ্য পূরণ করুন।`);
     }
@@ -484,11 +489,13 @@ export default function AppointmentPage() {
         }
       }
 
-      // 3. Compute Serial for this Doctor on this Date
-      const sameDayDoctorAppts = appointments.filter(
-        (a) => a.date === date && (a.doctorId === docId || a.doctorName === docName)
+      // 3. Compute Serial for this Doctor on this Date per Serial Category
+      const sameCategoryDoctorAppts = appointments.filter(
+        (a) => a.date === date && 
+               (a.doctorId === docId || a.doctorName === docName) &&
+               (a.serialType || 'NEW') === serialType
       );
-      const nextSerial = sameDayDoctorAppts.length + 1;
+      const nextSerial = sameCategoryDoctorAppts.length + 1;
 
       // 4. Create Appointment Record
       const apntItem: Appointment = {
@@ -509,6 +516,7 @@ export default function AppointmentPage() {
         reference: reference.trim(),
         status: 'Waiting',
         serial: nextSerial,
+        serialType: serialType,
         apntNo: `AP-${Date.now().toString().slice(-4)}`,
         createdAt: new Date().toISOString(),
       };
@@ -572,6 +580,7 @@ export default function AppointmentPage() {
       setTime('10:30 AM');
       setReference('');
       setSearchRegOrPhone('');
+      setSerialType('NEW');
       await loadAppointments();
 
       // Automatically open Thermal Token Receipt preview & trigger print for patient
@@ -581,7 +590,7 @@ export default function AppointmentPage() {
         printThermalReceipt(apntItem, clinicSettings, '80mm');
       }, 350);
 
-      setSyncFeedback(`রোগী "${apntItem.name}"-এর জন্য সিরিয়াল #${nextSerial} (${docName}) সফলভাবে সংরক্ষিত হয়েছে এবং টোকেন স্লিপ প্রস্তুত!`);
+      setSyncFeedback(`রোগী "${apntItem.name}"-এর জন্য সিরিয়াল ${serialType}-#${nextSerial} (${docName}) সফলভাবে সংরক্ষিত হয়েছে এবং টোকেন স্লিপ প্রস্তুত!`);
       setTimeout(() => setSyncFeedback(''), 5000);
     } catch (err) {
       console.error('Failed to create appointment:', err);
@@ -683,11 +692,15 @@ export default function AppointmentPage() {
         }
       }
 
-      // Compute next serial number for this doctor on this new date
-      const sameDayDoctorAppts = appointments.filter(
-        (a) => a.id !== rescheduleApnt.id && a.date === rescheduleDate && (a.doctorId === docId || a.doctorName === docName)
+      // Compute next serial number for this doctor on this new date for this category
+      const targetCategory = (rescheduleApnt.serialType || 'NEW') as AppointmentSerialType;
+      const sameCategoryDoctorAppts = appointments.filter(
+        (a) => a.id !== rescheduleApnt.id && 
+               a.date === rescheduleDate && 
+               (a.doctorId === docId || a.doctorName === docName) &&
+               (a.serialType || 'NEW') === targetCategory
       );
-      const nextSerial = sameDayDoctorAppts.length + 1;
+      const nextSerial = sameCategoryDoctorAppts.length + 1;
       const newStatus: Appointment['status'] = rescheduleDate > todayStr ? 'Scheduled' : 'Waiting';
 
       const updated: Appointment = {
@@ -695,6 +708,7 @@ export default function AppointmentPage() {
         date: rescheduleDate,
         time: rescheduleTime || '10:00 AM',
         serial: nextSerial,
+        serialType: targetCategory,
         doctorId: docId,
         doctorName: docName,
         status: newStatus,
@@ -712,6 +726,7 @@ export default function AppointmentPage() {
           date: updated.date,
           time: updated.time,
           serial: updated.serial,
+          serialType: updated.serialType,
           doctorId: updated.doctorId,
           doctorName: updated.doctorName,
           status: updated.status,
@@ -721,13 +736,14 @@ export default function AppointmentPage() {
       logActivity({
         action: 'RESCHEDULE_APPOINTMENT',
         module: 'Appointment',
-        description: `অ্যাপয়েন্টমেন্ট পুনর্নির্ধারণ: ${rescheduleApnt.name} (${rescheduleApnt.date} থেকে নতুন তারিখ ${rescheduleDate}, সিরিয়াল #${nextSerial})`,
+        description: `অ্যাপয়েন্টমেন্ট পুনর্নির্ধারণ: ${rescheduleApnt.name} (${rescheduleApnt.date} থেকে নতুন তারিখ ${rescheduleDate}, সিরিয়াল ${targetCategory}-#${nextSerial})`,
         metadata: {
           apntId: updated.id,
           name: updated.name,
           oldDate: rescheduleApnt.date,
           newDate: rescheduleDate,
           newSerial: nextSerial,
+          serialType: targetCategory,
           doctorName: docName,
         },
         user: user || undefined,
@@ -739,7 +755,7 @@ export default function AppointmentPage() {
       await checkMongoCount();
 
       const targetTabLabel = rescheduleDate > todayStr ? 'আসন্ন (Upcoming) তালিকায়' : 'আজকের সিরিয়াল তালিকায়';
-      setSyncFeedback(`রোগী "${updated.name}"-এর সিরিয়াল ${rescheduleDate} তারিখে নতুন সিরিয়াল #${nextSerial} (${docName}) সহ সফলভাবে রিশিডিউল করা হয়েছে এবং ${targetTabLabel} যুক্ত হয়েছে!`);
+      setSyncFeedback(`রোগী "${updated.name}"-এর সিরিয়াল ${rescheduleDate} তারিখে নতুন সিরিয়াল ${targetCategory}-#${nextSerial} (${docName}) সহ সফলভাবে রিশিডিউল করা হয়েছে এবং ${targetTabLabel} যুক্ত হয়েছে!`);
       setTimeout(() => setSyncFeedback(''), 5000);
     } catch (err) {
       console.error('Failed to reschedule appointment:', err);
@@ -785,7 +801,15 @@ export default function AppointmentPage() {
         }
       }
 
-      // 4. Search Query
+      // 4. Serial Category Filter
+      if (selectedCategoryFilter !== 'ALL') {
+        const itemCategory = (a.serialType || 'NEW').toUpperCase();
+        if (itemCategory !== selectedCategoryFilter) {
+          return false;
+        }
+      }
+
+      // 5. Search Query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesName = a.name.toLowerCase().includes(q);
@@ -798,15 +822,22 @@ export default function AppointmentPage() {
       return true;
     });
 
-    // 5. Sorting
+    // 6. Sorting
     if (sortBy === 'time_asc') {
       result.sort((a, b) => parseTimeToMinutes(a.time) - parseTimeToMinutes(b.time));
     } else if (sortBy === 'time_desc') {
       result.sort((a, b) => parseTimeToMinutes(b.time) - parseTimeToMinutes(a.time));
+    } else if (sortBy === 'serial') {
+      result.sort((a, b) => {
+        const catA = (a.serialType || 'NEW').toUpperCase();
+        const catB = (b.serialType || 'NEW').toUpperCase();
+        if (catA !== catB) return catA.localeCompare(catB);
+        return (a.serial || 0) - (b.serial || 0);
+      });
     }
 
     return result;
-  }, [appointments, user, viewFilter, selectedDoctorFilter, selectedSlotFilter, sortBy, searchQuery, todayStr]);
+  }, [appointments, user, viewFilter, selectedDoctorFilter, selectedSlotFilter, selectedCategoryFilter, sortBy, searchQuery, todayStr]);
 
   // Metrics
   const metrics = useMemo(() => {
@@ -1027,6 +1058,77 @@ export default function AppointmentPage() {
             <span className="text-[10px] text-slate-500">
               (পুরাতন রোগী হলে স্বয়ংক্রিয়ভাবে নাম, বয়স ও ফোন নম্বর ফিল্ডে বসে যাবে)
             </span>
+          </div>
+
+          {/* SERIAL TYPE SELECTION (4 DYNAMIC TYPES: NEW, OLD, LAB, PHYSIO) */}
+          <div className="p-3 bg-gradient-to-r from-slate-50 via-sky-50/40 to-blue-50/50 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-slate-800 font-bold flex items-center gap-1.5 text-xs">
+                <Hash className="w-4 h-4 text-blue-600" />
+                <span>সিরিয়ালের ধরণ (Serial Type) <span className="text-red-500">*</span></span>
+              </label>
+              <span className="text-[11px] text-slate-500 font-medium hidden sm:inline">
+                নির্বাচিত ধরণের জন্য ডাইনামিক সিরিয়াল নম্বর নির্ধারিত হবে
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { 
+                  type: 'NEW' as const, 
+                  label: 'নতুন রোগী', 
+                  desc: 'New Patient', 
+                  activeBorder: 'border-emerald-500 ring-2 ring-emerald-400 bg-emerald-50/50',
+                  badge: 'bg-emerald-600 text-white'
+                },
+                { 
+                  type: 'OLD' as const, 
+                  label: 'পুরাতন রোগী', 
+                  desc: 'Old / Follow-up', 
+                  activeBorder: 'border-indigo-500 ring-2 ring-indigo-400 bg-indigo-50/50',
+                  badge: 'bg-indigo-600 text-white'
+                },
+                { 
+                  type: 'LAB' as const, 
+                  label: 'ল্যাব সার্ভিস', 
+                  desc: 'Dental Lab Work', 
+                  activeBorder: 'border-amber-500 ring-2 ring-amber-400 bg-amber-50/50',
+                  badge: 'bg-amber-600 text-white'
+                },
+                { 
+                  type: 'PHYSIO' as const, 
+                  label: 'ফিজিওথেরাপি', 
+                  desc: 'Physiotherapy', 
+                  activeBorder: 'border-teal-500 ring-2 ring-teal-400 bg-teal-50/50',
+                  badge: 'bg-teal-600 text-white'
+                },
+              ].map((item) => {
+                const isSelected = serialType === item.type;
+                return (
+                  <button
+                    key={item.type}
+                    type="button"
+                    onClick={() => setSerialType(item.type)}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      isSelected
+                        ? `${item.activeBorder} shadow-xs`
+                        : 'bg-white border-slate-200 hover:border-slate-300 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`px-2 py-0.5 rounded font-mono font-black text-xs ${isSelected ? item.badge : 'bg-slate-100 text-slate-700'}`}>
+                        {item.type}
+                      </span>
+                      {isSelected && <span className="w-2 h-2 rounded-full bg-blue-600"></span>}
+                    </div>
+                    <div>
+                      <div className="font-bold text-slate-900 text-xs">{item.label}</div>
+                      <div className="text-[10px] text-slate-400">{item.desc}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="grid grid-cols-12 gap-3">
@@ -1304,6 +1406,25 @@ export default function AppointmentPage() {
           </select>
         </div>
 
+        {/* Serial Category Filter Dropdown */}
+        <div className="flex items-center space-x-1.5">
+          <span className="font-semibold text-slate-700 flex items-center gap-1">
+            <Hash className="w-3.5 h-3.5 text-blue-600" />
+            <span>সিরিয়াল ধরণ:</span>
+          </span>
+          <select
+            value={selectedCategoryFilter}
+            onChange={(e) => setSelectedCategoryFilter(e.target.value as any)}
+            className="px-2 py-1.5 border border-slate-300 rounded-lg font-bold text-xs bg-white text-slate-900 focus:outline-none focus:border-blue-600 cursor-pointer"
+          >
+            <option value="ALL">সকল ধরণ (All Types)</option>
+            <option value="NEW">NEW (নতুন রোগী)</option>
+            <option value="OLD">OLD (পুরাতন রোগী)</option>
+            <option value="LAB">LAB (ল্যাব সার্ভিস)</option>
+            <option value="PHYSIO">PHYSIO (ফিজিওথেরাপি)</option>
+          </select>
+        </div>
+
         {/* Sort By Dropdown */}
         <div className="flex items-center space-x-1.5">
           <span className="font-semibold text-slate-700 flex items-center gap-1">
@@ -1338,7 +1459,7 @@ export default function AppointmentPage() {
           <table className="w-full text-left">
             <thead className="bg-sky-50 text-slate-800 font-bold border-b border-sky-100">
               <tr>
-                <th className="p-3 w-16 text-center">সিরিয়াল</th>
+                <th className="p-3 w-28 text-center">সিরিয়াল</th>
                 <th className="p-3 w-28 text-center font-mono">রেজি. নং</th>
                 <th className="p-3">রোগীর নাম ও পরিচয়</th>
                 <th className="p-3">যোগাযোগ</th>
@@ -1376,9 +1497,17 @@ export default function AppointmentPage() {
                     <tr key={apnt.id} className="hover:bg-sky-50/40 transition">
                       {/* Serial Token */}
                       <td className="p-3 text-center">
-                        <span className="w-8 h-8 bg-blue-100 text-blue-900 rounded-full font-mono font-black text-xs inline-flex items-center justify-center border border-blue-200">
-                          {apnt.serial}
-                        </span>
+                        {(() => {
+                          const catMeta = getSerialTypeMeta(apnt.serialType);
+                          return (
+                            <span 
+                              className={`px-2 py-0.5 rounded-lg font-mono font-black text-xs inline-flex items-center justify-center border shadow-2xs ${catMeta.bg} ${catMeta.text} ${catMeta.border}`}
+                              title={`${catMeta.label} (${catMeta.code})`}
+                            >
+                              {catMeta.code}-#{apnt.serial}
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       {/* Registration Number */}

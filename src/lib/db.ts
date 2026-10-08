@@ -171,6 +171,8 @@ export interface TemplateItem {
   count?: number; // Usage frequency for autosave learning
 }
 
+export type AppointmentSerialType = 'NEW' | 'OLD' | 'LAB' | 'PHYSIO';
+
 export interface Appointment {
   id: string;
   regNo?: number;
@@ -189,6 +191,7 @@ export interface Appointment {
   reference?: string;
   status: 'Scheduled' | 'Waiting' | 'In-Progress' | 'Completed' | 'Cancelled' | 'Absent' | 'Sent to Cashier' | 'Payment Done' | string;
   serial: number;
+  serialType?: AppointmentSerialType;
   apntNo: string;
   createdAt: string;
   prescriptionId?: string;

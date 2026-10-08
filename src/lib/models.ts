@@ -77,6 +77,7 @@ const AppointmentSchema = new Schema(
     reference: String,
     status: { type: String, index: true },
     serial: Number,
+    serialType: { type: String, default: 'NEW' },
     apntNo: String,
     prescriptionId: String,
     createdAt: { type: Date, default: Date.now },

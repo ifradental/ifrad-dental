@@ -88,6 +88,49 @@ export function getClinicHeaderDetails(clinicSettings: ClinicSettings | null) {
   };
 }
 
+export function getSerialTypeMeta(serialType?: string) {
+  const type = (serialType || 'NEW').toUpperCase();
+  switch (type) {
+    case 'OLD':
+      return {
+        code: 'OLD',
+        label: 'পুরাতন রোগী',
+        subText: 'Old / Follow-up',
+        bg: 'bg-indigo-100',
+        text: 'text-indigo-800',
+        border: 'border-indigo-300',
+      };
+    case 'LAB':
+      return {
+        code: 'LAB',
+        label: 'ল্যাব সার্ভিস',
+        subText: 'Dental Lab Work',
+        bg: 'bg-amber-100',
+        text: 'text-amber-800',
+        border: 'border-amber-300',
+      };
+    case 'PHYSIO':
+      return {
+        code: 'PHYSIO',
+        label: 'ফিজিওথেরাপি',
+        subText: 'Physiotherapy',
+        bg: 'bg-teal-100',
+        text: 'text-teal-800',
+        border: 'border-teal-300',
+      };
+    case 'NEW':
+    default:
+      return {
+        code: 'NEW',
+        label: 'নতুন রোগী',
+        subText: 'New Patient',
+        bg: 'bg-emerald-100',
+        text: 'text-emerald-800',
+        border: 'border-emerald-300',
+      };
+  }
+}
+
 export function printThermalReceipt(
   appointment: Appointment, 
   clinicSettings: ClinicSettings | null, 
@@ -101,18 +144,19 @@ export function printThermalReceipt(
   }
 
   const { clinicName, clinicSubtitle, clinicAddress, hotline, visitingHours } = getClinicHeaderDetails(clinicSettings);
+  const typeMeta = getSerialTypeMeta(appointment.serialType);
+  const fullSerialStr = `${typeMeta.code}-#${appointment.serial}`;
   const docName = appointment.doctorName || clinicSettings?.doctor1?.name || 'ডা. নাহিদ হাসান';
   const formattedFee = (appointment.paid || appointment.visitFee || 0).toLocaleString();
   const dateFormatted = appointment.date || new Date().toISOString().split('T')[0];
   const timeFormatted = appointment.time || '10:00 AM';
   const isPaid = (appointment.paid || 0) > 0;
-  const printTimeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
   const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Serial Token #${appointment.serial} - ${appointment.name}</title>
+  <title>Serial Token ${fullSerialStr} - ${appointment.name}</title>
   <style>
     @page {
       size: ${paperSize} auto;
@@ -130,7 +174,7 @@ export function printThermalReceipt(
       width: ${widthMm}mm;
       max-width: 100%;
       margin: 0 auto;
-      padding: 3mm 1.5mm;
+      padding: 2mm 1.5mm;
       color: #000;
       font-size: ${paperSize === '58mm' ? '10px' : '11px'};
       line-height: 1.3;
@@ -141,45 +185,26 @@ export function printThermalReceipt(
     .text-left { text-align: left; }
     .font-bold { font-weight: bold; }
     .clinic-title {
-      font-size: ${paperSize === '58mm' ? '12px' : '14px'};
+      font-size: ${paperSize === '58mm' ? '13px' : '15px'};
       font-weight: 900;
       line-height: 1.2;
       margin-bottom: 2px;
       text-transform: uppercase;
       letter-spacing: -0.2px;
     }
-    .clinic-sub {
-      font-size: ${paperSize === '58mm' ? '8.5px' : '9.5px'};
-      color: #111;
-      font-weight: 600;
-      margin-bottom: 2px;
-    }
-    .clinic-contact {
-      font-size: ${paperSize === '58mm' ? '8px' : '9px'};
-      color: #222;
-      margin-bottom: 1.5px;
-    }
     .divider {
       border-top: 1px dashed #000;
-      margin: 4px 0;
-    }
-    .double-divider {
-      border-top: 2px solid #000;
-      margin: 5px 0;
+      margin: 3px 0;
     }
     .token-box {
       border: 2px solid #000;
-      padding: 4px 2px;
-      margin: 5px 0;
+      padding: 5px 2px;
+      margin: 4px 0;
       text-align: center;
       border-radius: 4px;
     }
-    .token-label {
-      font-size: ${paperSize === '58mm' ? '9px' : '10.5px'};
-      font-weight: bold;
-    }
     .token-number {
-      font-size: ${paperSize === '58mm' ? '24px' : '30px'};
+      font-size: ${paperSize === '58mm' ? '24px' : '28px'};
       font-weight: 900;
       line-height: 1.1;
       margin: 1px 0;
@@ -200,27 +225,13 @@ export function printThermalReceipt(
       vertical-align: top;
     }
     .info-label {
-      width: 34%;
+      width: 32%;
       font-weight: bold;
       color: #000;
     }
     .info-value {
-      width: 66%;
+      width: 68%;
       font-weight: 600;
-    }
-    .footer-note {
-      font-size: ${paperSize === '58mm' ? '8px' : '9px'};
-      text-align: center;
-      line-height: 1.25;
-      margin-top: 3px;
-    }
-    .barcode-line {
-      letter-spacing: 3px;
-      font-family: monospace;
-      font-weight: bold;
-      font-size: 13px;
-      margin: 3px 0;
-      text-align: center;
     }
     @media print {
       body {
@@ -233,79 +244,30 @@ export function printThermalReceipt(
   <!-- DYNAMIC CLINIC HEADER -->
   <div class="text-center">
     <div class="clinic-title">${clinicName}</div>
-    <div class="clinic-sub">${clinicSubtitle}</div>
-    <div class="clinic-contact font-bold">হটলাইন: ${hotline}</div>
-    <div class="clinic-contact">${clinicAddress}</div>
-    ${visitingHours ? `<div class="clinic-contact" style="font-size: 8px;">সময়: ${visitingHours}</div>` : ''}
     <div class="divider"></div>
-    <div class="font-bold" style="font-size: ${paperSize === '58mm' ? '9.5px' : '11px'};">*** রোগী সিরিয়াল টোকেন স্লিপ ***</div>
   </div>
 
   <!-- SERIAL TOKEN BOX -->
   <div class="token-box">
-    <div class="token-label">আপনার সিরিয়াল নম্বর (SERIAL NO)</div>
-    <div class="token-number">#${appointment.serial}</div>
-    <div class="token-id">টোকেন নং: ${appointment.apntNo || `AP-${appointment.serial}`}</div>
+    <div class="token-number">${fullSerialStr}</div>
+    <div class="token-id">টোকেন নং: ${appointment.apntNo || `AP-${appointment.serial}`} • [${typeMeta.label}]</div>
   </div>
 
   <!-- PATIENT & DOCTOR DETAILS -->
   <table class="info-table">
     <tr>
-      <td class="info-label">রেজি. নং:</td>
-      <td class="info-value font-bold" style="font-family: monospace;">#${appointment.regNo || 'New'}</td>
-    </tr>
-    <tr>
       <td class="info-label">রোগীর নাম:</td>
       <td class="info-value font-bold">${appointment.name}</td>
-    </tr>
-    <tr>
-      <td class="info-label">বয়স ও লিঙ্গ:</td>
-      <td class="info-value">${appointment.age || '-'} Y / ${appointment.sex === 'F' ? 'মহিলা' : 'পুরুষ'}</td>
-    </tr>
-    <tr>
-      <td class="info-label">মোবাইল:</td>
-      <td class="info-value" style="font-family: monospace; font-weight: bold;">${appointment.mobile}</td>
-    </tr>
-    <tr>
-      <td class="info-label">তারিখ ও সময়:</td>
-      <td class="info-value font-bold">${dateFormatted} • ${timeFormatted}</td>
     </tr>
     <tr>
       <td class="info-label">অ্যাসাইন ডক্টর:</td>
       <td class="info-value font-bold">${docName}</td>
     </tr>
-    ${appointment.problem ? `
     <tr>
-      <td class="info-label">সমস্যা:</td>
-      <td class="info-value">${appointment.problem}</td>
-    </tr>` : ''}
-  </table>
-
-  <div class="divider"></div>
-
-  <!-- FINANCIALS -->
-  <table class="info-table">
-    <tr>
-      <td class="info-label font-bold" style="font-size: ${paperSize === '58mm' ? '10px' : '11px'};">কনসালটেশন ফি:</td>
-      <td class="info-value text-right font-bold" style="font-size: ${paperSize === '58mm' ? '11px' : '12px'};">৳ ${formattedFee}</td>
-    </tr>
-    <tr>
-      <td class="info-label">পেমেন্ট স্ট্যাটাস:</td>
-      <td class="info-value text-right font-bold">${isPaid ? '[PAID / পরিশোধিত]' : '[DUE / বকেয়া]'}</td>
+      <td class="info-label">তারিখ ও সময়:</td>
+      <td class="info-value font-bold">${dateFormatted} • ${timeFormatted}</td>
     </tr>
   </table>
-
-  <div class="double-divider"></div>
-
-  <!-- FOOTER & BARCODE -->
-  <div class="text-center">
-    <div class="barcode-line">||||| |||||| ||||| |||||||</div>
-    <div class="footer-note font-bold">অনুগ্রহ করে সিরিয়াল ডাকা পর্যন্ত ওয়েটিং রুমে অপেক্ষা করুন।</div>
-    <div class="footer-note">রোগী দেখার সময় পরিস্থিতির উপর নির্ভর করে কিছুটা পরিবর্তন হতে পারে।</div>
-    <div class="divider"></div>
-    <div style="font-size: 8.5px; font-weight: 600;">সুস্বাস্থ্য কামনায় — ${clinicName}</div>
-    <div style="font-size: 8px; color: #555; margin-top: 2px;">ইস্যু সময়: ${printTimeStr}</div>
-  </div>
 
   <script>
     window.onload = function() {
@@ -333,6 +295,8 @@ export default function ThermalTokenModal({
   if (!isOpen || !appointment) return null;
 
   const { clinicName, clinicSubtitle, clinicAddress, hotline, visitingHours } = getClinicHeaderDetails(clinicSettings);
+  const typeMeta = getSerialTypeMeta(appointment.serialType);
+  const fullSerialStr = `${typeMeta.code}-#${appointment.serial}`;
   const docName = appointment.doctorName || clinicSettings?.doctor1?.name || 'ডা. নাহিদ হাসান';
   const formattedFee = (appointment.paid || appointment.visitFee || 0).toLocaleString();
   const dateFormatted = appointment.date || new Date().toISOString().split('T')[0];
@@ -356,7 +320,7 @@ export default function ThermalTokenModal({
               <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
                 <span>সিরিয়াল টোকেন স্লিপ</span>
                 <span className="text-[11px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-mono font-bold">
-                  #{appointment.serial}
+                  {fullSerialStr}
                 </span>
               </h3>
               <p className="text-[11px] text-slate-400">থার্মাল প্রিন্টারের জন্য প্রস্তুত</p>
@@ -404,107 +368,42 @@ export default function ThermalTokenModal({
         {/* Modal Body / Realistic POS Slip Preview */}
         <div className="p-5 bg-slate-950 flex justify-center items-center">
           <div 
-            className={`bg-white text-black p-4 rounded-md shadow-lg border border-slate-300 font-sans transition-all duration-200 ${
-              paperSize === '58mm' ? 'w-[230px] text-[11px]' : 'w-[290px] text-xs'
+            className={`bg-white text-black p-3.5 rounded-md shadow-lg border border-slate-300 font-sans transition-all duration-200 ${
+              paperSize === '58mm' ? 'w-[210px] text-[10px]' : 'w-[250px] text-xs'
             }`}
           >
             {/* DYNAMIC CLINIC HEADER */}
-            <div className="text-center pb-2">
+            <div className="text-center pb-1">
               <h4 className="font-black text-sm uppercase tracking-tight text-slate-900 leading-tight">
                 {clinicName}
               </h4>
-              <p className="text-[10px] font-semibold text-slate-700 mt-0.5">{clinicSubtitle}</p>
-              <p className="text-[10px] font-mono font-bold text-slate-800">হটলাইন: {hotline}</p>
-              <p className="text-[9.5px] text-slate-600 leading-tight mt-0.5">{clinicAddress}</p>
-              {visitingHours && (
-                <p className="text-[8.5px] text-slate-500 font-medium mt-0.5">সময়: {visitingHours}</p>
-              )}
-              <div className="border-t border-dashed border-slate-400 my-2"></div>
-              <div className="font-bold text-[11px] tracking-wider text-slate-800 uppercase">
-                *** রোগী সিরিয়াল টোকেন ***
-              </div>
+              <div className="border-t border-dashed border-slate-300 my-1.5"></div>
             </div>
 
             {/* Token Badge */}
-            <div className="border-2 border-slate-900 rounded-lg p-2.5 my-2 text-center bg-slate-50">
-              <div className="text-[10px] font-bold text-slate-700 uppercase tracking-wider">
-                আপনার সিরিয়াল নম্বর
+            <div className="border-2 border-slate-900 rounded-lg py-2.5 px-2 my-1.5 text-center bg-slate-50">
+              <div className="text-3xl sm:text-4xl font-black text-slate-950 tracking-tight font-mono leading-none">
+                {fullSerialStr}
               </div>
-              <div className="text-3xl font-black text-slate-950 my-0.5 tracking-tight">
-                #{appointment.serial}
-              </div>
-              <div className="text-[10px] font-bold font-mono text-slate-600">
-                টোকেন নং: {appointment.apntNo || `AP-${appointment.serial}`}
+              <div className="text-[10px] font-bold font-mono text-slate-600 mt-1">
+                টোকেন নং: {appointment.apntNo || `AP-${appointment.serial}`} • [{typeMeta.label}]
               </div>
             </div>
 
             {/* Info List */}
-            <div className="space-y-1.5 py-1 text-slate-800">
-              <div className="flex justify-between items-center text-[11px]">
-                <span className="font-bold text-slate-600">রেজি. নং:</span>
-                <span className="font-mono font-bold text-slate-950 bg-slate-100 px-1.5 py-0.5 rounded">
-                  #{appointment.regNo || 'New'}
-                </span>
-              </div>
-              <div className="flex justify-between items-start text-[11px]">
+            <div className="space-y-1.5 py-1 text-slate-800 text-[11px]">
+              <div className="flex justify-between items-start">
                 <span className="font-bold text-slate-600">রোগীর নাম:</span>
-                <span className="font-bold text-slate-950 text-right max-w-[150px]">{appointment.name}</span>
+                <span className="font-bold text-slate-950 text-right max-w-[140px]">{appointment.name}</span>
               </div>
-              <div className="flex justify-between items-center text-[10.5px]">
-                <span className="font-bold text-slate-600">বয়স ও লিঙ্গ:</span>
-                <span className="font-medium text-slate-900">
-                  {appointment.age || '-'} Y / {appointment.sex === 'F' ? 'মহিলা' : 'পুরুষ'}
-                </span>
+              <div className="flex justify-between items-start">
+                <span className="font-bold text-slate-600">অ্যাসাইন ডক্টর:</span>
+                <span className="font-bold text-indigo-950 text-right max-w-[140px]">{docName}</span>
               </div>
-              <div className="flex justify-between items-center text-[10.5px]">
-                <span className="font-bold text-slate-600">মোবাইল:</span>
-                <span className="font-mono font-bold text-slate-900">{appointment.mobile}</span>
-              </div>
-              <div className="flex justify-between items-center text-[10.5px]">
+              <div className="flex justify-between items-center">
                 <span className="font-bold text-slate-600">তারিখ ও সময়:</span>
                 <span className="font-semibold text-slate-900">{dateFormatted} • {timeFormatted}</span>
               </div>
-              <div className="flex justify-between items-start text-[10.5px]">
-                <span className="font-bold text-slate-600">ডাক্তার:</span>
-                <span className="font-bold text-indigo-950 text-right max-w-[140px]">{docName}</span>
-              </div>
-              {appointment.problem && (
-                <div className="flex justify-between items-start text-[10px]">
-                  <span className="font-bold text-slate-600">সমস্যা:</span>
-                  <span className="text-slate-800 text-right max-w-[140px]">{appointment.problem}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="border-t border-dashed border-slate-400 my-2"></div>
-
-            {/* Fee Section */}
-            <div className="space-y-1 text-slate-900">
-              <div className="flex justify-between items-center font-bold text-xs">
-                <span>কনসালটেশন ফি:</span>
-                <span className="text-sm font-mono text-emerald-800">৳ {formattedFee}</span>
-              </div>
-              <div className="flex justify-between items-center text-[10.5px]">
-                <span className="font-medium text-slate-600">পেমেন্ট স্ট্যাটাস:</span>
-                <span className={`font-bold ${isPaid ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {isPaid ? 'পরিশোধিত (PAID)' : 'বকেয়া (DUE)'}
-                </span>
-              </div>
-            </div>
-
-            <div className="border-t-2 border-slate-900 my-2"></div>
-
-            {/* Footer */}
-            <div className="text-center pt-1">
-              <div className="font-mono text-xs tracking-widest my-1">||||| |||||| ||||| |||||||</div>
-              <p className="text-[9px] font-bold text-slate-800">
-                অনুগ্রহ করে সিরিয়াল ডাকা পর্যন্ত ওয়েটিং রুমে অপেক্ষা করুন।
-              </p>
-              <p className="text-[8.5px] text-slate-500 mt-0.5">
-                রোগী দেখার সময় পরিস্থিতির উপর নির্ভর করে কিছুটা পরিবর্তন হতে পারে।
-              </p>
-              <div className="border-t border-dashed border-slate-300 my-1.5"></div>
-              <p className="text-[8.5px] font-semibold text-slate-700">ধন্যবাদ — {clinicName}</p>
             </div>
           </div>
         </div>
