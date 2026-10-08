@@ -624,6 +624,11 @@ export default function AppointmentPage() {
   };
 
   const handleStatusChange = async (id: string, newStatus: Appointment['status']) => {
+    // 1. Optimistic state update so UI metrics and cards update instantly (0ms)
+    setAppointments((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, status: newStatus } : a))
+    );
+
     await db.appointments.update(id, { status: newStatus });
     const updated = await db.appointments.get(id);
     if (updated) {
@@ -645,7 +650,7 @@ export default function AppointmentPage() {
         user: user || undefined,
       });
     }
-    loadAppointments();
+    await loadAppointments();
     setSyncFeedback(`Appointment status updated to "${newStatus}" in MongoDB!`);
     setTimeout(() => setSyncFeedback(''), 3000);
   };
@@ -814,7 +819,7 @@ export default function AppointmentPage() {
       if (viewFilter === 'absent') {
         // Appointments explicitly marked as Absent, or past dates without completed prescription
         const isPastUnattended = a.date < todayStr && a.status !== 'Completed' && !a.prescriptionId;
-        const isExplicitAbsent = a.status === 'Absent';
+        const isExplicitAbsent = (a.status || '').toLowerCase() === 'absent';
         if (!isPastUnattended && !isExplicitAbsent) return false;
       }
 
@@ -881,9 +886,9 @@ export default function AppointmentPage() {
     const todayList = list.filter((a) => a.date === todayStr);
     const waiting = todayList.filter((a) => a.status === 'Waiting').length;
     const completed = todayList.filter((a) => a.status === 'Completed').length;
-    const absentToday = todayList.filter((a) => a.status === 'Absent').length;
+    const absentToday = todayList.filter((a) => (a.status || '').toLowerCase() === 'absent').length;
     // Absent Total includes past unattended appointments + explicitly Absent appointments
-    const absentTotal = list.filter((a) => a.status === 'Absent' || (a.date < todayStr && a.status !== 'Completed' && !a.prescriptionId)).length;
+    const absentTotal = list.filter((a) => (a.status || '').toLowerCase() === 'absent' || (a.date < todayStr && a.status !== 'Completed' && !a.prescriptionId)).length;
     const upcomingTotal = list.filter((a) => a.date > todayStr).length;
 
     return {
