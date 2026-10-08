@@ -50,6 +50,7 @@ import { logActivity } from '@/lib/activityLogger';
 import ThermalTokenModal, { printThermalReceipt, getSerialTypeMeta } from '@/components/appointments/ThermalTokenModal';
 
 const STANDARD_TIME_SLOTS_30MIN = [
+  '10:00 AM',
   '10:30 AM',
   '11:00 AM',
   '11:30 AM',
@@ -75,6 +76,28 @@ const STANDARD_TIME_SLOTS_30MIN = [
   '09:30 PM',
   '10:00 PM',
   '10:30 PM',
+  '11:00 PM',
+  '11:30 PM',
+  '12:00 AM',
+  '12:30 AM',
+  '01:00 AM',
+  '01:30 AM',
+  '02:00 AM',
+  '02:30 AM',
+  '03:00 AM',
+  '03:30 AM',
+  '04:00 AM',
+  '04:30 AM',
+  '05:00 AM',
+  '05:30 AM',
+  '06:00 AM',
+  '06:30 AM',
+  '07:00 AM',
+  '07:30 AM',
+  '08:00 AM',
+  '08:30 AM',
+  '09:00 AM',
+  '09:30 AM',
 ];
 
 function parseTimeToMinutes(timeStr?: string): number {
@@ -86,14 +109,16 @@ function parseTimeToMinutes(timeStr?: string): number {
   const period = (match[3] || '').toUpperCase();
   if (period === 'PM' && hours < 12) hours += 12;
   if (period === 'AM' && hours === 12) hours = 0;
-  return hours * 60 + minutes;
+  const totalMins = hours * 60 + minutes;
+  // Offset relative to 10:00 AM (600 mins) so 24-hr day orders from 10:00 AM
+  return (totalMins - 600 + 1440) % 1440;
 }
 
 function TimeSlotPicker({
   value,
   onChange,
   className = '',
-  placeholder = '10:30 AM',
+  placeholder = '10:00 AM',
 }: {
   value: string;
   onChange: (val: string) => void;
@@ -132,7 +157,7 @@ function TimeSlotPicker({
       </button>
 
       {isOpen && (
-        <div className="absolute left-0 top-full mt-1 w-full min-w-[150px] bg-white border border-slate-200 rounded-xl shadow-2xl z-50 divide-y divide-slate-100 py-1">
+        <div className="absolute left-0 top-full mt-1 w-full min-w-[150px] max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-2xl z-50 divide-y divide-slate-100 py-1">
           {STANDARD_TIME_SLOTS_30MIN.map((slot) => {
             const isSelected = value === slot;
             return (
@@ -189,7 +214,7 @@ export default function AppointmentPage() {
   const [rescheduleApnt, setRescheduleApnt] = useState<Appointment | null>(null);
   const [isRescheduleModalOpen, setIsRescheduleModalOpen] = useState<boolean>(false);
   const [rescheduleDate, setRescheduleDate] = useState<string>('');
-  const [rescheduleTime, setRescheduleTime] = useState<string>('10:30 AM');
+  const [rescheduleTime, setRescheduleTime] = useState<string>('10:00 AM');
   const [rescheduleDoctorId, setRescheduleDoctorId] = useState<string>('');
   const [rescheduleDoctorName, setRescheduleDoctorName] = useState<string>('');
 
@@ -213,7 +238,7 @@ export default function AppointmentPage() {
   const [assignedDoctorId, setAssignedDoctorId] = useState<string>('');
   const [assignedDoctorName, setAssignedDoctorName] = useState<string>('');
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [time, setTime] = useState<string>('10:30 AM');
+  const [time, setTime] = useState<string>('10:00 AM');
   const [reference, setReference] = useState<string>('');
   const [visitFee, setVisitFee] = useState<number>(500);
 
@@ -577,7 +602,7 @@ export default function AppointmentPage() {
       setMobile('');
       setAddress('');
       setProblem('');
-      setTime('10:30 AM');
+      setTime('10:00 AM');
       setReference('');
       setSearchRegOrPhone('');
       setSerialType('NEW');
@@ -667,7 +692,7 @@ export default function AppointmentPage() {
     const tomorrowStr = tomorrow.toISOString().split('T')[0];
     
     setRescheduleDate(apnt.date < todayStr ? todayStr : tomorrowStr);
-    setRescheduleTime(apnt.time || '10:30 AM');
+    setRescheduleTime(apnt.time || '10:00 AM');
     setRescheduleDoctorId(apnt.doctorId || '');
     setRescheduleDoctorName(apnt.doctorName || '');
     setIsRescheduleModalOpen(true);
@@ -1256,7 +1281,7 @@ export default function AppointmentPage() {
             <div className="col-span-6 sm:col-span-2">
               <label className="block text-slate-700 font-semibold mb-1 flex items-center justify-between">
                 <span>সময় / স্লট (Time)</span>
-                <span className="text-[10px] text-blue-600 font-bold">১০:৩০ AM - ১০:৩০ PM</span>
+                <span className="text-[10px] text-blue-600 font-bold">১০:০০ AM - ২৪ ঘণ্টা (৩০ মিনিট স্লট)</span>
               </label>
               <TimeSlotPicker value={time} onChange={setTime} />
             </div>
@@ -1437,8 +1462,8 @@ export default function AppointmentPage() {
             className="px-2 py-1.5 border border-slate-300 rounded-lg font-bold text-xs bg-white text-slate-900 focus:outline-none focus:border-blue-600 cursor-pointer"
           >
             <option value="serial">সিরিয়াল নং (Serial)</option>
-            <option value="time_asc">সময় আগে-পরে (Time: 10:30 AM → Night)</option>
-            <option value="time_desc">সময় পরে-আগে (Time: Night → 10:30 AM)</option>
+            <option value="time_asc">সময় আগে-পরে (Time: 10:00 AM → 24 Hours)</option>
+            <option value="time_desc">সময় পরে-আগে (Time: 24 Hours → 10:00 AM)</option>
           </select>
         </div>
         <div className="relative">
@@ -1773,12 +1798,12 @@ export default function AppointmentPage() {
               <div>
                 <label className="block text-slate-700 font-bold mb-1 flex items-center justify-between">
                   <span>নতুন সময় / স্লট (Time Slot) <span className="text-red-500">*</span></span>
-                  <span className="text-[10px] text-indigo-600 font-bold">১০:৩০ AM - ১০:৩০ PM</span>
+                  <span className="text-[10px] text-indigo-600 font-bold">১০:০০ AM - ২৪ ঘণ্টা (৩০ মিনিট স্লট)</span>
                 </label>
                 <TimeSlotPicker
                   value={rescheduleTime}
                   onChange={setRescheduleTime}
-                  placeholder="10:30 AM"
+                  placeholder="10:00 AM"
                 />
               </div>
 

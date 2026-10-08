@@ -71,6 +71,7 @@ export default function EmployeesPage() {
     salary: 0,
     joiningDate: new Date().toISOString().split('T')[0],
     address: '',
+    permanentAddress: '',
     nidOrPassport: '',
     status: 'Active' as 'Active' | 'Inactive',
     note: '',
@@ -156,6 +157,7 @@ export default function EmployeesPage() {
       salary: emp.salary || 0,
       joiningDate: emp.joiningDate || new Date().toISOString().split('T')[0],
       address: emp.address || '',
+      permanentAddress: emp.permanentAddress || '',
       nidOrPassport: emp.nidOrPassport || '',
       status: emp.status || 'Active',
       note: emp.note || '',
@@ -210,6 +212,7 @@ export default function EmployeesPage() {
         salary: Number(formData.salary) || 0,
         joiningDate: formData.joiningDate || new Date().toISOString().split('T')[0],
         address: formData.address.trim(),
+        permanentAddress: formData.permanentAddress.trim(),
         nidOrPassport: formData.nidOrPassport.trim(),
         status: formData.status,
         note: formData.note.trim(),
@@ -1188,7 +1191,7 @@ export default function EmployeesPage() {
                   </select>
                 </div>
 
-                <div className="col-span-12 sm:col-span-6">
+                <div className="col-span-12 sm:col-span-4">
                   <label className="font-bold text-slate-700 block mb-1">NID / Passport Number</label>
                   <input
                     type="text"
@@ -1199,13 +1202,24 @@ export default function EmployeesPage() {
                   />
                 </div>
 
-                <div className="col-span-12 sm:col-span-6">
+                <div className="col-span-12 sm:col-span-4">
                   <label className="font-bold text-slate-700 block mb-1">Present Address (বর্তমান ঠিকানা)</label>
                   <input
                     type="text"
                     value={formData.address}
                     onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                     placeholder="খিলগাঁও, ঢাকা..."
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+
+                <div className="col-span-12 sm:col-span-4">
+                  <label className="font-bold text-slate-700 block mb-1">Permanent Address (স্থায়ী ঠিকানা)</label>
+                  <input
+                    type="text"
+                    value={formData.permanentAddress}
+                    onChange={(e) => setFormData({ ...formData, permanentAddress: e.target.value })}
+                    placeholder="গ্রাম, থানা, জেলা..."
                     className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
                   />
                 </div>
@@ -1396,9 +1410,18 @@ export default function EmployeesPage() {
 
                 {viewingEmployee.address && (
                   <div className="flex justify-between items-start py-1 border-b border-slate-100">
-                    <span className="text-slate-500">ঠিকানা:</span>
+                    <span className="text-slate-500">বর্তমান ঠিকানা:</span>
                     <span className="font-medium text-slate-800 text-right max-w-[250px]">
                       {viewingEmployee.address}
+                    </span>
+                  </div>
+                )}
+
+                {viewingEmployee.permanentAddress && (
+                  <div className="flex justify-between items-start py-1 border-b border-slate-100">
+                    <span className="text-slate-500">স্থায়ী ঠিকানা:</span>
+                    <span className="font-medium text-slate-800 text-right max-w-[250px]">
+                      {viewingEmployee.permanentAddress}
                     </span>
                   </div>
                 )}

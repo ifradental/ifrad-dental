@@ -382,6 +382,7 @@ export interface Employee {
   salary?: number;
   joiningDate: string;
   address?: string;
+  permanentAddress?: string;
   nidOrPassport?: string;
   status: 'Active' | 'Inactive';
   avatar?: string;
